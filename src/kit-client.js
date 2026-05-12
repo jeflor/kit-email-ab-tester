@@ -77,20 +77,45 @@ async function createTag(apiKey, name) {
   return tag.id;
 }
 
-// Fetch all subscribers in a single tag, cursor-paginated.
+// Fetch all subscribers in a single tag. WARNING: Kit v4's
+// GET /v4/tags/{id}/subscribers has a hard ~2000-record cap regardless of
+// pagination params, status filter, or sort order. For tags with more than
+// 2000 active subscribers this returns INCOMPLETE results. Use
+// fetchAudienceByTagSelection instead, which works around the cap by
+// pulling /v4/subscribers (uncapped) and filtering client-side.
 async function fetchSubscribersInTag(apiKey, tagId) {
   const out = [];
   let cursor;
   while (true) {
-    const query = { per_page: 500 };
+    const query = { per_page: 1000 };
     if (cursor) query.after = cursor;
     const data = await kitFetch('GET', `/tags/${tagId}/subscribers`, apiKey, { query });
-    const batch = (data.subscribers || []).map(s => ({ id: s.id, email: s.email_address }));
-    out.push(...batch);
-    const next = data.pagination?.end_cursor && data.pagination?.has_next_page
-      ? data.pagination.end_cursor : null;
-    if (!next) break;
-    cursor = next;
+    for (const s of (data.subscribers || [])) out.push({ id: s.id, email: s.email_address });
+    cursor = data.pagination?.has_next_page ? data.pagination.end_cursor : null;
+    if (!cursor) break;
+  }
+  return out;
+}
+
+// Fetch every active subscriber on the account with their tag memberships
+// included. This is what we use to build an audience because Kit's per-tag
+// endpoint truncates at ~2000 records, but /v4/subscribers paginates fully.
+async function fetchAllSubscribersWithTags(apiKey) {
+  const out = [];
+  let cursor;
+  while (true) {
+    const query = { per_page: 1000, include: 'tags' };
+    if (cursor) query.after = cursor;
+    const data = await kitFetch('GET', `/subscribers`, apiKey, { query });
+    for (const s of (data.subscribers || [])) {
+      out.push({
+        id: s.id,
+        email: s.email_address,
+        tagIds: (s.tags || []).map(t => t.id),
+      });
+    }
+    cursor = data.pagination?.has_next_page ? data.pagination.end_cursor : null;
+    if (!cursor) break;
     if (out.length > 500_000) throw new Error('Pagination runaway (>500k subscribers)');
   }
   return out;
@@ -107,23 +132,18 @@ async function fetchAudienceByTagSelection(apiKey, { includeTagIds = [], exclude
     err.userFacing = true;
     throw err;
   }
-
-  const includedById = new Map();
-  for (const tagId of includeTagIds) {
-    const subs = await fetchSubscribersInTag(apiKey, tagId);
-    for (const s of subs) includedById.set(s.id, s);
+  const includeSet = new Set(includeTagIds.map(Number));
+  const excludeSet = new Set(excludeTagIds.map(Number));
+  const all = await fetchAllSubscribersWithTags(apiKey);
+  const out = [];
+  for (const s of all) {
+    const hasInclude = s.tagIds.some(id => includeSet.has(id));
+    if (!hasInclude) continue;
+    const hasExclude = s.tagIds.some(id => excludeSet.has(id));
+    if (hasExclude) continue;
+    out.push({ id: s.id, email: s.email });
   }
-
-  if (excludeTagIds.length) {
-    const excludedIds = new Set();
-    for (const tagId of excludeTagIds) {
-      const subs = await fetchSubscribersInTag(apiKey, tagId);
-      for (const s of subs) excludedIds.add(s.id);
-    }
-    for (const id of excludedIds) includedById.delete(id);
-  }
-
-  return Array.from(includedById.values()).sort((a, b) => a.id - b.id);
+  return out.sort((a, b) => a.id - b.id);
 }
 
 // Tag a batch of subscribers individually. Kit's /v4/bulk/* endpoints all
@@ -251,6 +271,7 @@ module.exports = {
   createTag,
   tagSubscriberByEmail,
   fetchAudienceByTagSelection,
+  fetchAllSubscribersWithTags,
   fetchSubscribersInTag,
   bulkTagSubscribers,
   bulkUntagSubscribers,
