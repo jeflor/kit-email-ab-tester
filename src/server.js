@@ -220,14 +220,14 @@ app.post('/api/preview', (req, res) => {
     </div>
   </div>
 
-  <h4>Opened email</h4>
+  <h4>Opened email (rendered at 700px max-width, matches what subscribers will see)</h4>
   <div class="frame">
     <div class="meta">
       <div class="from">From: Your Sender Name &lt;you@example.com&gt;</div>
       <div class="subject">${safeSubject}</div>
       ${safePreview ? `<div class="preview">${safePreview}</div>` : ''}
     </div>
-    <div class="body">${email_html}</div>
+    <div class="body"><div style="max-width:700px;margin:0 auto;">${email_html}</div></div>
   </div>
 </body></html>`);
 });

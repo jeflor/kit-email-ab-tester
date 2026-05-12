@@ -128,11 +128,19 @@ async function bulkUntagSubscribers(apiKey, tagId, subscribers) {
 
 // Create AND send a broadcast targeting a single tag (the temp tag we just
 // applied to the half-batch). Setting send_at to now triggers immediate send.
-async function createAndSendBroadcast(apiKey, { subject, contentHtml, previewText, targetTagId, fromEmail }) {
+// Wrap the user's body in a max-width container so the email renders at a
+// readable width inside Kit's template (which is otherwise full-width).
+// Default 700px; pass maxWidth=0 to opt out.
+function withMaxWidth(html, maxWidth) {
+  if (!maxWidth || maxWidth <= 0) return html;
+  return `<div style="max-width:${maxWidth}px;margin:0 auto;">${html}</div>`;
+}
+
+async function createAndSendBroadcast(apiKey, { subject, contentHtml, previewText, targetTagId, fromEmail, maxWidth = 700 }) {
   const nowIso = new Date().toISOString();
   const body = {
     subject,
-    content: contentHtml,
+    content: withMaxWidth(contentHtml, maxWidth),
     description: subject,
     public: false,
     published_at: nowIso,
