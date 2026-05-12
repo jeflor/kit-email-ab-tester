@@ -57,7 +57,9 @@ async function kitFetch(method, path, apiKey, { query, body } = {}) {
     const res = await fetch(url, init);
     if (res.status === 429) {
       const retryAfter = parseRetryAfter(res.headers.get('retry-after'));
-      const backoff = retryAfter ?? (Math.min(30_000, 1000 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 500));
+      // Kit's window appears to reset every ~60s. Wait that long minimum so
+      // we don't immediately re-trip on the next attempt.
+      const backoff = retryAfter ?? (65_000 + attempt * 5_000 + Math.floor(Math.random() * 1000));
       if (attempt === MAX_ATTEMPTS) {
         throw new Error(`Kit ${method} ${path} → 429 after ${MAX_ATTEMPTS} attempts (rate limited)`);
       }
@@ -169,41 +171,30 @@ async function fetchAudienceByTagSelection(apiKey, { includeTagIds = [], exclude
   return out.sort((a, b) => a.id - b.id);
 }
 
-// Tag a batch of subscribers individually. Kit's /v4/bulk/* endpoints all
-// require OAuth (not API-key auth), so we use POST /v4/tags/{tag_id}/subscribers/{id}
-// per subscriber. That endpoint accepts the API key. Concurrency limited so
-// we don't burst-rate-limit Kit on large batches.
-async function bulkTagSubscribers(apiKey, tagId, subscribers, concurrency = 3) {
-  if (!subscribers.length) return;
-  let i = 0;
-  async function worker() {
-    while (i < subscribers.length) {
-      const idx = i++;
-      const sub = subscribers[idx];
-      try {
-        await kitFetch('POST', `/tags/${tagId}/subscribers/${sub.id}`, apiKey);
-      } catch (e) {
-        // Re-throw on the first error so we don't half-tag a batch silently.
-        throw new Error(`Failed to tag subscriber ${sub.id} (${sub.email}): ${e.message}`);
-      }
+// Tag subscribers serially with a fixed gap to stay under Kit's per-minute
+// rate limit. Kit's /v4/bulk/* endpoints all require OAuth (we use API key),
+// so we POST /v4/tags/{tag_id}/subscribers/{id} per subscriber. Even with
+// retries on 429, the only reliable approach is to not trip the limit at
+// all — hence 600ms gap → ~100 req/min, safely under Kit's window.
+const TAG_GAP_MS = 600;
+
+async function bulkTagSubscribers(apiKey, tagId, subscribers) {
+  for (const sub of subscribers) {
+    try {
+      await kitFetch('POST', `/tags/${tagId}/subscribers/${sub.id}`, apiKey);
+    } catch (e) {
+      throw new Error(`Failed to tag subscriber ${sub.id} (${sub.email}): ${e.message}`);
     }
+    await sleep(TAG_GAP_MS);
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, subscribers.length) }, worker));
 }
 
-async function bulkUntagSubscribers(apiKey, tagId, subscribers, concurrency = 3) {
-  if (!subscribers.length) return;
-  let i = 0;
-  async function worker() {
-    while (i < subscribers.length) {
-      const idx = i++;
-      const sub = subscribers[idx];
-      try {
-        await kitFetch('DELETE', `/tags/${tagId}/subscribers/${sub.id}`, apiKey);
-      } catch (_e) { /* best-effort untag */ }
-    }
+async function bulkUntagSubscribers(apiKey, tagId, subscribers) {
+  for (const sub of subscribers) {
+    try { await kitFetch('DELETE', `/tags/${tagId}/subscribers/${sub.id}`, apiKey); }
+    catch (_e) { /* best-effort untag */ }
+    await sleep(TAG_GAP_MS);
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, subscribers.length) }, worker));
 }
 
 // Create AND send a broadcast targeting a single tag (the temp tag we just
