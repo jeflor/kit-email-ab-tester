@@ -93,11 +93,22 @@ function renderAudienceOptions() {
   select.innerHTML = list.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('');
 }
 
+function getLineup() {
+  return document.getElementById('subject_lineup').value
+    .split('\n').map(s => s.trim()).filter(Boolean);
+}
+
 function refreshRoundSummary() {
   const batch = Number(document.getElementById('batch_size').value) || defaults.batch_size;
   const wait = Number(document.getElementById('wait_minutes').value) || defaults.wait_minutes;
+  const lineup = getLineup();
+  const abRounds = Math.max(0, lineup.length - 1);
+  const lineupNote = lineup.length
+    ? `${lineup.length} subject${lineup.length === 1 ? '' : 's'} = ${abRounds} A/B round${abRounds === 1 ? '' : 's'}`
+    : 'add subjects above';
+  document.getElementById('lineup_summary').textContent = lineupNote;
   document.getElementById('round_summary').textContent =
-    `Rough timing: for a 4,000-person list, that's ~${Math.ceil(4000 / batch)} rounds × ${wait}min wait = ~${(Math.ceil(4000 / batch) * wait / 60).toFixed(1)} hours of wall time. Send-time itself per round is just a minute or two.`;
+    `Each round uses ${batch} people (split ${Math.ceil(batch/2)}/${Math.floor(batch/2)}). With ${abRounds} round${abRounds === 1 ? '' : 's'} × ${wait}min wait = ~${(abRounds * wait / 60).toFixed(1)} hours of wall time. Last batch and any remainder use the running winner.`;
 }
 
 async function loadAudiences() {
@@ -153,9 +164,11 @@ async function loadCampaigns() {
 document.getElementById('audience_type').addEventListener('change', renderAudienceOptions);
 document.getElementById('batch_size').addEventListener('input', refreshRoundSummary);
 document.getElementById('wait_minutes').addEventListener('input', refreshRoundSummary);
+document.getElementById('subject_lineup').addEventListener('input', refreshRoundSummary);
 
 document.getElementById('preview_btn').addEventListener('click', async () => {
-  const subject = document.getElementById('starting_subject').value || '(no subject)';
+  const lineup = getLineup();
+  const subject = lineup[0] || '(no subject — add at least one in step 2)';
   const email_html = quill.root.innerHTML;
   const r = await fetch('/api/preview', {
     method: 'POST',
@@ -168,11 +181,12 @@ document.getElementById('preview_btn').addEventListener('click', async () => {
 });
 
 document.getElementById('test_btn').addEventListener('click', async () => {
-  const subject = document.getElementById('starting_subject').value;
+  const lineup = getLineup();
+  const subject = lineup[0];
   const email_html = quill.root.innerHTML;
   const test_email = document.getElementById('test_email').value.trim();
   if (!subject || !email_html.trim() || !test_email) {
-    return banner('warn', 'Need a subject, an email body, and an address to test to.');
+    return banner('warn', 'Need at least one subject line, an email body, and an address to test to.');
   }
   const r = await fetch('/api/test-send', {
     method: 'POST',
@@ -185,24 +199,26 @@ document.getElementById('test_btn').addEventListener('click', async () => {
 });
 
 document.getElementById('launch_btn').addEventListener('click', async () => {
-  if (!defaults.kit_configured || !defaults.openai_configured) {
+  if (!defaults.kit_configured) {
     showSetup(true);
-    return banner('warn', 'Save your Kit and OpenAI API keys in the Setup panel before launching.');
+    return banner('warn', 'Save your Kit API key in the Setup panel before launching.');
   }
+  const lineup = getLineup();
   const payload = {
     name: document.getElementById('name').value.trim(),
     audience_type: document.getElementById('audience_type').value,
     audience_id: document.getElementById('audience_id').value,
     audience_label: document.getElementById('audience_id').selectedOptions[0]?.textContent || '',
-    starting_subject: document.getElementById('starting_subject').value.trim(),
+    subject_lineup: lineup,
     email_html: quill.root.innerHTML,
     batch_size: document.getElementById('batch_size').value,
     wait_minutes: document.getElementById('wait_minutes').value,
   };
-  if (!payload.name || !payload.audience_id || !payload.starting_subject || !payload.email_html.trim()) {
-    return banner('warn', 'Fill in all four steps before launching.');
+  if (!payload.name || !payload.audience_id || lineup.length < 2 || !payload.email_html.trim()) {
+    return banner('warn', 'Need a name, an audience, at least 2 subject lines, and an email body.');
   }
-  if (!confirm(`Launch "${payload.name}" to ${payload.audience_label}?\n\nThis will start sending real emails through your Kit account.`)) return;
+  const summary = lineup.map((s, i) => `${i+1}. ${s}`).join('\n');
+  if (!confirm(`Launch "${payload.name}" to ${payload.audience_label}?\n\nWill test these ${lineup.length} subject lines head-to-head:\n${summary}\n\nThis will send real emails through your Kit account.`)) return;
 
   const r = await fetch('/api/campaigns', {
     method: 'POST',

@@ -8,6 +8,14 @@ fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 
+// Lightweight migration: existing campaigns rows may lack subject_lineup.
+function ensureColumn(table, col, definition) {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (rows.length && !rows.find(r => r.name === col)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${definition}`);
+  }
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -22,6 +30,7 @@ db.exec(`
     audience_label TEXT,
     starting_subject TEXT NOT NULL,
     current_winner TEXT NOT NULL,
+    subject_lineup TEXT NOT NULL DEFAULT '[]', -- JSON array; index 0 is starting subject, rest are challengers in order
     email_html TEXT NOT NULL,
     batch_size INTEGER NOT NULL DEFAULT 1000,
     wait_seconds INTEGER NOT NULL DEFAULT 3600,
@@ -59,6 +68,8 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_rounds_campaign ON rounds(campaign_id);
 `);
+
+ensureColumn('campaigns', 'subject_lineup', "TEXT NOT NULL DEFAULT '[]'");
 
 function getSetting(key, fallback = null) {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);

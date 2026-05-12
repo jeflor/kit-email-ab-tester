@@ -70,7 +70,7 @@ app.get('/api/defaults', (_req, res) => {
     batch_size: parseInt(getSetting('default_batch_size', '1000'), 10),
     wait_minutes: parseInt(getSetting('default_wait_minutes', '60'), 10),
     kit_configured: !!getSetting('kit_api_key'),
-    openai_configured: !!getSetting('openai_api_key'),
+    openai_configured: !!getSetting('openai_api_key'), // optional; only used if user opts into AI mode
   });
 });
 
@@ -115,14 +115,18 @@ app.post('/api/campaigns', (req, res) => {
     audience_type,
     audience_id,
     audience_label,
-    starting_subject,
+    subject_lineup,        // array of subject strings (at least 2)
     email_html,
     batch_size,
     wait_minutes,
   } = req.body || {};
 
-  if (!name || !audience_type || !audience_id || !starting_subject || !email_html) {
-    return res.status(400).json({ error: 'missing_fields' });
+  const lineup = Array.isArray(subject_lineup)
+    ? subject_lineup.map(s => String(s || '').trim()).filter(Boolean)
+    : [];
+
+  if (!name || !audience_type || !audience_id || lineup.length < 2 || !email_html) {
+    return res.status(400).json({ error: 'missing_fields', hint: 'Need at least 2 subject lines.' });
   }
   if (!['tag', 'segment'].includes(audience_type)) {
     return res.status(400).json({ error: 'bad_audience_type' });
@@ -137,19 +141,21 @@ app.post('/api/campaigns', (req, res) => {
   const result = db.prepare(`
     INSERT INTO campaigns (
       name, audience_type, audience_id, audience_label,
-      starting_subject, current_winner, email_html,
+      starting_subject, current_winner, subject_lineup, email_html,
       batch_size, wait_seconds,
       status, created_at, updated_at
     ) VALUES (
       @name, @audience_type, @audience_id, @audience_label,
-      @starting_subject, @starting_subject, @email_html,
+      @starting_subject, @starting_subject, @subject_lineup, @email_html,
       @batch_size, @wait_seconds,
       'draft', @ts, @ts
     )
   `).run({
     name, audience_type, audience_id,
     audience_label: audience_label || '',
-    starting_subject, email_html,
+    starting_subject: lineup[0],
+    subject_lineup: JSON.stringify(lineup),
+    email_html,
     batch_size: finalBatch,
     wait_seconds: finalWaitMin * 60,
     ts,

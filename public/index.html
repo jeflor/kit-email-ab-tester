@@ -28,15 +28,8 @@
       </label>
       <input type="text" id="kit_api_key" placeholder="not set">
 
-      <label>OpenAI API key
-        <span class="hint">platform.openai.com → API keys</span>
-      </label>
-      <input type="text" id="openai_api_key" placeholder="not set">
-
       <details style="margin-top: 16px;">
-        <summary class="muted small" style="cursor:pointer;">Advanced settings (optional)</summary>
-        <label>OpenAI model <span class="hint">default: gpt-4o-mini</span></label>
-        <input type="text" id="openai_model" placeholder="gpt-4o-mini">
+        <summary class="muted small" style="cursor:pointer;">Advanced / optional settings</summary>
 
         <div class="row" style="margin-top:8px;">
           <div>
@@ -49,8 +42,16 @@
           </div>
         </div>
 
+        <label>OpenAI API key
+          <span class="hint">only needed if you ever want AI to auto-generate challenger subjects instead of providing them yourself</span>
+        </label>
+        <input type="text" id="openai_api_key" placeholder="not set (optional)">
+
+        <label>OpenAI model <span class="hint">default: gpt-4o-mini</span></label>
+        <input type="text" id="openai_model" placeholder="gpt-4o-mini">
+
         <label>AI prompt template <span class="hint">leave blank for the built-in default</span></label>
-        <textarea id="ai_system_prompt" rows="4" placeholder="Built-in default focuses on curiosity-driven, distinct alternatives to the current winner."></textarea>
+        <textarea id="ai_system_prompt" rows="3" placeholder="Built-in default focuses on curiosity-driven, distinct alternatives to the current winner."></textarea>
       </details>
 
       <div class="actions">
@@ -89,8 +90,13 @@
       <label>Campaign name <span class="hint">just for your records</span></label>
       <input type="text" id="name" placeholder="e.g. Spring webinar invite">
 
-      <label>Starting subject line <span class="hint">we'll generate AI challengers against this</span></label>
-      <input type="text" id="starting_subject" placeholder="e.g. Discover our brand new strategy today!">
+      <label>Subject lines to test <span class="hint">one per line · at least 2 · winner moves up each round</span></label>
+      <textarea id="subject_lineup" rows="6" placeholder="Discover our brand new strategy today!
+The mistake 92% of marketers are still making
+Last chance: doors close Friday
+You asked, we built it
+Here's what your competitors don't want you to know"></textarea>
+      <p class="muted small" id="lineup_summary"></p>
 
       <label>Email body</label>
       <div class="editor-wrap"><div id="editor"></div></div>

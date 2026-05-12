@@ -17,7 +17,6 @@
 
 const { db, getSetting } = require('./db');
 const kit = require('./kit-client');
-const { generateChallengerSubject } = require('./openai-client');
 
 const tickTimers = new Map(); // campaignId → setTimeout handle
 
@@ -70,22 +69,27 @@ async function performSend(campaignId) {
   if (!campaign || campaign.status !== 'running') return;
 
   const kitKey = getSetting('kit_api_key');
-  const openaiKey = getSetting('openai_api_key');
-  const openaiModel = getSetting('openai_model', 'gpt-4o-mini');
-  const systemPrompt = getSetting('ai_system_prompt');
+  const lineup = JSON.parse(campaign.subject_lineup || '[]');
 
-  // Round 1: pull full audience from Kit and cache the count.
-  // Subsequent rounds: re-pull (audience may have changed) but only need a slice.
+  // Pull the audience to size the campaign.
   const subscribers = await kit.fetchAllSubscribersForAudience(
     kitKey,
     campaign.audience_type,
     campaign.audience_id
   );
-  const totalRounds = Math.ceil(subscribers.length / campaign.batch_size);
+  const audienceRounds = Math.ceil(subscribers.length / campaign.batch_size);
+
+  // We only do A/B for as many rounds as we have challengers in the lineup
+  // (lineup[0] is the starting subject; the rest are challengers).
+  const abRounds = Math.max(0, lineup.length - 1);
+  const totalRounds = Math.min(audienceRounds, abRounds);
   updateCampaign(campaignId, { total_rounds: totalRounds });
 
   const roundNumber = campaign.current_round + 1;
   if (roundNumber > totalRounds) {
+    // Out of challengers OR out of audience — done. Remaining audience (if any)
+    // can be sent the final winner via a separate "blast remainder" action,
+    // but for simplicity we leave that as a manual step the user can take in Kit.
     updateCampaign(campaignId, { status: 'done', next_action: null, next_run_at: null });
     return;
   }
@@ -94,14 +98,15 @@ async function performSend(campaignId) {
   const batch = subscribers.slice(start, start + campaign.batch_size);
   const half = Math.ceil(batch.length / 2);
   const groupA = batch.slice(0, half);            // current winner
-  const groupB = batch.slice(half);               // AI challenger
+  const groupB = batch.slice(half);               // next challenger from lineup
 
-  const challenger = await generateChallengerSubject({
-    apiKey: openaiKey,
-    model: openaiModel,
-    systemPrompt,
-    currentWinner: campaign.current_winner,
-  });
+  // Challenger is the next entry in the lineup after the starting subject.
+  // Round 1 → lineup[1], Round 2 → lineup[2], etc.
+  const challenger = lineup[roundNumber];
+  if (!challenger) {
+    updateCampaign(campaignId, { status: 'done', next_action: null, next_run_at: null });
+    return;
+  }
 
   // Create the round record now so it shows up on the monitor immediately.
   const roundId = insertRound({
