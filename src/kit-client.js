@@ -126,29 +126,41 @@ async function fetchAudienceByTagSelection(apiKey, { includeTagIds = [], exclude
   return Array.from(includedById.values()).sort((a, b) => a.id - b.id);
 }
 
-// Bulk-tag up to ~1000 subscribers in one call. Kit v4 accepts an array
-// of {tag_id, subscriber_id} pairs.
-async function bulkTagSubscribers(apiKey, tagId, subscribers) {
+// Tag a batch of subscribers individually. Kit's /v4/bulk/* endpoints all
+// require OAuth (not API-key auth), so we use POST /v4/tags/{tag_id}/subscribers/{id}
+// per subscriber. That endpoint accepts the API key. Concurrency limited so
+// we don't burst-rate-limit Kit on large batches.
+async function bulkTagSubscribers(apiKey, tagId, subscribers, concurrency = 8) {
   if (!subscribers.length) return;
-  const CHUNK = 1000;
-  for (let i = 0; i < subscribers.length; i += CHUNK) {
-    const slice = subscribers.slice(i, i + CHUNK);
-    const taggings = slice.map(s => ({ tag_id: tagId, subscriber_id: s.id }));
-    await kitFetch('POST', '/bulk/tags/subscribers', apiKey, { body: { taggings } });
+  let i = 0;
+  async function worker() {
+    while (i < subscribers.length) {
+      const idx = i++;
+      const sub = subscribers[idx];
+      try {
+        await kitFetch('POST', `/tags/${tagId}/subscribers/${sub.id}`, apiKey);
+      } catch (e) {
+        // Re-throw on the first error so we don't half-tag a batch silently.
+        throw new Error(`Failed to tag subscriber ${sub.id} (${sub.email}): ${e.message}`);
+      }
+    }
   }
+  await Promise.all(Array.from({ length: Math.min(concurrency, subscribers.length) }, worker));
 }
 
-// Bulk-untag — same endpoint but DELETE. Best-effort cleanup.
-async function bulkUntagSubscribers(apiKey, tagId, subscribers) {
+async function bulkUntagSubscribers(apiKey, tagId, subscribers, concurrency = 8) {
   if (!subscribers.length) return;
-  const CHUNK = 1000;
-  for (let i = 0; i < subscribers.length; i += CHUNK) {
-    const slice = subscribers.slice(i, i + CHUNK);
-    const taggings = slice.map(s => ({ tag_id: tagId, subscriber_id: s.id }));
-    try {
-      await kitFetch('DELETE', '/bulk/tags/subscribers', apiKey, { body: { taggings } });
-    } catch (_e) { /* best-effort */ }
+  let i = 0;
+  async function worker() {
+    while (i < subscribers.length) {
+      const idx = i++;
+      const sub = subscribers[idx];
+      try {
+        await kitFetch('DELETE', `/tags/${tagId}/subscribers/${sub.id}`, apiKey);
+      } catch (_e) { /* best-effort untag */ }
+    }
   }
+  await Promise.all(Array.from({ length: Math.min(concurrency, subscribers.length) }, worker));
 }
 
 // Create AND send a broadcast targeting a single tag (the temp tag we just
