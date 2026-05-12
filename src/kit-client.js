@@ -29,10 +29,21 @@ function requireKey(apiKey) {
   }
 }
 
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function parseRetryAfter(headerValue) {
+  if (!headerValue) return null;
+  if (/^\d+$/.test(headerValue.trim())) return parseInt(headerValue, 10) * 1000;
+  const t = Date.parse(headerValue);
+  if (!Number.isNaN(t)) return Math.max(0, t - Date.now());
+  return null;
+}
+
 async function kitFetch(method, path, apiKey, { query, body } = {}) {
   requireKey(apiKey);
   const qs = query ? '?' + new URLSearchParams(query) : '';
-  const res = await fetch(`${KIT_BASE}${path}${qs}`, {
+  const url = `${KIT_BASE}${path}${qs}`;
+  const init = {
     method,
     headers: {
       'Accept': 'application/json',
@@ -40,14 +51,26 @@ async function kitFetch(method, path, apiKey, { query, body } = {}) {
       'X-Kit-Api-Key': apiKey,
     },
     body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) {
+  };
+  const MAX_ATTEMPTS = 6;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const res = await fetch(url, init);
+    if (res.status === 429) {
+      const retryAfter = parseRetryAfter(res.headers.get('retry-after'));
+      const backoff = retryAfter ?? (Math.min(30_000, 1000 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 500));
+      if (attempt === MAX_ATTEMPTS) {
+        throw new Error(`Kit ${method} ${path} → 429 after ${MAX_ATTEMPTS} attempts (rate limited)`);
+      }
+      await sleep(backoff);
+      continue;
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Kit ${method} ${path} → ${res.status}: ${text.slice(0, 300)}`);
+    }
     const text = await res.text();
-    throw new Error(`Kit ${method} ${path} → ${res.status}: ${text.slice(0, 300)}`);
+    return text ? JSON.parse(text) : {};
   }
-  // Some DELETE responses are empty
-  const text = await res.text();
-  return text ? JSON.parse(text) : {};
 }
 
 async function listTags(apiKey) {
@@ -150,7 +173,7 @@ async function fetchAudienceByTagSelection(apiKey, { includeTagIds = [], exclude
 // require OAuth (not API-key auth), so we use POST /v4/tags/{tag_id}/subscribers/{id}
 // per subscriber. That endpoint accepts the API key. Concurrency limited so
 // we don't burst-rate-limit Kit on large batches.
-async function bulkTagSubscribers(apiKey, tagId, subscribers, concurrency = 8) {
+async function bulkTagSubscribers(apiKey, tagId, subscribers, concurrency = 3) {
   if (!subscribers.length) return;
   let i = 0;
   async function worker() {
@@ -168,7 +191,7 @@ async function bulkTagSubscribers(apiKey, tagId, subscribers, concurrency = 8) {
   await Promise.all(Array.from({ length: Math.min(concurrency, subscribers.length) }, worker));
 }
 
-async function bulkUntagSubscribers(apiKey, tagId, subscribers, concurrency = 8) {
+async function bulkUntagSubscribers(apiKey, tagId, subscribers, concurrency = 3) {
   if (!subscribers.length) return;
   let i = 0;
   async function worker() {
