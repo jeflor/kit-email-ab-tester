@@ -261,6 +261,40 @@ app.post('/api/test-send', async (req, res) => {
   }
 });
 
+// Find and delete all broadcasts whose subject starts with "[TEST] ".
+// Two-step: GET returns the count (so the UI can confirm), POST does the delete.
+app.get('/api/test-broadcasts', async (_req, res) => {
+  try {
+    const kitKey = getSetting('kit_api_key');
+    if (!kitKey) return res.status(400).json({ error: 'kit_not_configured' });
+    const all = await kit.listBroadcasts(kitKey);
+    const tests = all.filter(b => typeof b.subject === 'string' && b.subject.startsWith('[TEST] '));
+    res.json({
+      count: tests.length,
+      sample: tests.slice(0, 5).map(t => ({ id: t.id, subject: t.subject })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/test-broadcasts', async (_req, res) => {
+  try {
+    const kitKey = getSetting('kit_api_key');
+    if (!kitKey) return res.status(400).json({ error: 'kit_not_configured' });
+    const all = await kit.listBroadcasts(kitKey);
+    const tests = all.filter(b => typeof b.subject === 'string' && b.subject.startsWith('[TEST] '));
+    let deleted = 0;
+    let failed = 0;
+    for (const t of tests) {
+      try { await kit.deleteBroadcast(kitKey, t.id); deleted++; } catch (_e) { failed++; }
+    }
+    res.json({ ok: true, deleted, failed });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Boot ───────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {

@@ -166,6 +166,27 @@ async function createTestBroadcast(apiKey, { subject, contentHtml, previewText, 
   });
 }
 
+async function listBroadcasts(apiKey, query = {}) {
+  const out = [];
+  let cursor;
+  while (true) {
+    const q = { per_page: 500, ...query };
+    if (cursor) q.after = cursor;
+    const data = await kitFetch('GET', '/broadcasts', apiKey, { query: q });
+    out.push(...(data.broadcasts || []));
+    const next = data.pagination?.end_cursor && data.pagination?.has_next_page
+      ? data.pagination.end_cursor : null;
+    if (!next) break;
+    cursor = next;
+    if (out.length > 100_000) break;
+  }
+  return out;
+}
+
+async function deleteBroadcast(apiKey, broadcastId) {
+  return kitFetch('DELETE', `/broadcasts/${broadcastId}`, apiKey);
+}
+
 async function getBroadcastStats(apiKey, broadcastId) {
   const data = await kitFetch('GET', `/broadcasts/${broadcastId}/stats`, apiKey);
   const stats = data.broadcast?.stats || {};
@@ -188,5 +209,7 @@ module.exports = {
   bulkUntagSubscribers,
   createAndSendBroadcast,
   createTestBroadcast,
+  listBroadcasts,
+  deleteBroadcast,
   getBroadcastStats,
 };

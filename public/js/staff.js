@@ -165,6 +165,46 @@ document.getElementById('audience_type').addEventListener('change', renderAudien
 document.getElementById('batch_size').addEventListener('input', refreshRoundSummary);
 document.getElementById('wait_minutes').addEventListener('input', refreshRoundSummary);
 document.getElementById('subject_lineup').addEventListener('input', refreshRoundSummary);
+document.getElementById('cleanup_tests_btn').addEventListener('click', async (e) => {
+  e.preventDefault();
+  const result = document.getElementById('cleanup_result');
+  result.style.color = 'var(--muted)';
+  result.textContent = 'Counting test broadcasts in Kit…';
+  try {
+    const r = await fetch('/api/test-broadcasts');
+    const data = await r.json();
+    if (!r.ok) {
+      result.style.color = 'var(--bad)';
+      result.textContent = `✗ ${data.error || 'Could not list broadcasts.'}`;
+      return;
+    }
+    if (!data.count) {
+      result.style.color = 'var(--muted)';
+      result.textContent = 'No [TEST] broadcasts found.';
+      return;
+    }
+    if (!confirm(`Found ${data.count} broadcast${data.count === 1 ? '' : 's'} with [TEST] in the subject.\n\nDelete all of them from Kit? This cannot be undone.`)) {
+      result.style.color = 'var(--muted)';
+      result.textContent = 'Cancelled.';
+      return;
+    }
+    result.style.color = 'var(--muted)';
+    result.textContent = `Deleting ${data.count}…`;
+    const r2 = await fetch('/api/test-broadcasts', { method: 'DELETE' });
+    const data2 = await r2.json();
+    if (!r2.ok) {
+      result.style.color = 'var(--bad)';
+      result.textContent = `✗ ${data2.error || 'Cleanup failed.'}`;
+      return;
+    }
+    result.style.color = 'var(--good)';
+    result.textContent = `✓ Deleted ${data2.deleted}${data2.failed ? ` (${data2.failed} failed)` : ''}.`;
+  } catch (err) {
+    result.style.color = 'var(--bad)';
+    result.textContent = `✗ ${err.message}`;
+  }
+});
+
 document.getElementById('preview_text').addEventListener('input', () => {
   const v = document.getElementById('preview_text').value;
   const note = !v ? '' : v.length > 100 ? `${v.length} chars · may be truncated on mobile` : `${v.length} chars`;
