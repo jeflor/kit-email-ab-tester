@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Campaign — Kit AB Tester</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="topbar">
+    <h1>Kit Email AB Tester</h1>
+    <nav>
+      <a href="/">← New campaign</a>
+    </nav>
+  </div>
+
+  <div class="shell">
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+        <div>
+          <h2 id="name">Loading…</h2>
+          <p class="muted small" id="meta"></p>
+        </div>
+        <div id="status_pill"></div>
+      </div>
+
+      <h3>Current winning subject</h3>
+      <p style="font-size:18px; font-weight:600; margin:0 0 8px;" id="winner">—</p>
+
+      <h3>Progress</h3>
+      <p id="progress" class="small muted">—</p>
+
+      <div class="actions">
+        <button class="btn-ghost" id="pause_btn" style="display:none;">Pause</button>
+        <button id="resume_btn" style="display:none;">Resume</button>
+        <a href="/" class="btn btn-ghost">← Back to dashboard</a>
+      </div>
+      <p class="small" id="error_text" style="color: var(--bad); display:none;"></p>
+    </div>
+
+    <div class="card">
+      <h2>Round history</h2>
+      <div id="rounds"></div>
+    </div>
+  </div>
+
+  <script>
+    const id = location.pathname.split('/').pop();
+    let timer;
+
+    function pct(x) { return (Math.round((x || 0) * 10) / 10) + '%'; }
+    function escapeHtml(s) {
+      return String(s || '').replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+    }
+
+    async function refresh() {
+      const r = await fetch(`/api/campaigns/${id}`);
+      if (!r.ok) return;
+      const { campaign, rounds } = await r.json();
+
+      document.getElementById('name').textContent = campaign.name;
+      document.getElementById('meta').textContent =
+        `${campaign.audience_type}: ${campaign.audience_label || campaign.audience_id} · batch ${campaign.batch_size} · ${Math.round(campaign.wait_seconds/60)}min wait between rounds`;
+      document.getElementById('winner').textContent = campaign.current_winner;
+      document.getElementById('status_pill').innerHTML = `<span class="pill ${campaign.status}">${campaign.status}</span>`;
+      document.getElementById('progress').textContent =
+        `Round ${campaign.current_round} of ${campaign.total_rounds || '?'}` +
+        (campaign.next_action ? `   ·   next: ${campaign.next_action}${campaign.next_run_at ? ' at ' + new Date(campaign.next_run_at).toLocaleTimeString() : ''}` : '');
+
+      document.getElementById('pause_btn').style.display = campaign.status === 'running' ? '' : 'none';
+      document.getElementById('resume_btn').style.display = campaign.status === 'paused' ? '' : 'none';
+
+      const err = document.getElementById('error_text');
+      if (campaign.last_error) {
+        err.style.display = 'block';
+        err.textContent = `Last error: ${campaign.last_error}`;
+      } else {
+        err.style.display = 'none';
+      }
+
+      document.getElementById('rounds').innerHTML = rounds.length
+        ? rounds.slice().reverse().map(r => `
+          <div class="round-card">
+            <div class="round-head">
+              <strong>Round ${r.round_number}</strong>
+              <span class="small muted">
+                ${r.sent_at ? 'sent ' + new Date(r.sent_at).toLocaleString() : 'preparing…'}
+                ${r.evaluated_at ? '· evaluated ' + new Date(r.evaluated_at).toLocaleTimeString() : ''}
+              </span>
+            </div>
+            <div class="subjects">
+              <div>
+                <span class="${r.outcome === 'winner_kept' ? 'win' : 'lose'}">A: ${escapeHtml(r.winner_subject)}</span>
+                <span class="small muted">— ${pct(r.winner_rate)} (${r.winner_opens ?? '-'}/${r.winner_recipients ?? '-'})</span>
+              </div>
+              <div>
+                <span class="${r.outcome === 'challenger_won' ? 'win' : 'lose'}">B: ${escapeHtml(r.challenger_subject)}</span>
+                <span class="small muted">— ${pct(r.challenger_rate)} (${r.challenger_opens ?? '-'}/${r.challenger_recipients ?? '-'})</span>
+              </div>
+              ${r.outcome ? `<div class="small">${r.outcome === 'challenger_won' ? '🏆 Challenger took the crown.' : '👑 Defending champion held.'}</div>` : ''}
+            </div>
+          </div>
+        `).join('')
+        : '<p class="muted small">No rounds yet — the first send is on its way.</p>';
+    }
+
+    document.getElementById('pause_btn').addEventListener('click', async () => {
+      await fetch(`/api/campaigns/${id}/pause`, { method: 'POST' });
+      refresh();
+    });
+    document.getElementById('resume_btn').addEventListener('click', async () => {
+      await fetch(`/api/campaigns/${id}/resume`, { method: 'POST' });
+      refresh();
+    });
+    refresh();
+    timer = setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

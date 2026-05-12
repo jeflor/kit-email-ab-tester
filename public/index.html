@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Kit Email AB Tester</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css">
+</head>
+<body>
+  <div class="topbar">
+    <h1>Kit Email AB Tester</h1>
+    <nav>
+      <a href="#" id="toggle_setup">Setup</a>
+    </nav>
+  </div>
+
+  <div class="shell">
+    <div id="banner" class="banner" style="display:none;"></div>
+
+    <!-- Setup panel: shown automatically if keys aren't set, hidden otherwise -->
+    <div class="card" id="setup_card">
+      <h2>Setup</h2>
+      <p class="muted small">Enter your Kit secret API key and your OpenAI API key. They're saved on this server only — never shown back to the browser in full. Without these, you can't send anything.</p>
+
+      <label>Kit secret API key
+        <span class="hint">Kit → Settings → Advanced → Secret API key</span>
+      </label>
+      <input type="text" id="kit_api_secret" placeholder="not set">
+
+      <label>OpenAI API key
+        <span class="hint">platform.openai.com → API keys</span>
+      </label>
+      <input type="text" id="openai_api_key" placeholder="not set">
+
+      <details style="margin-top: 16px;">
+        <summary class="muted small" style="cursor:pointer;">Advanced settings (optional)</summary>
+        <label>OpenAI model <span class="hint">default: gpt-4o-mini</span></label>
+        <input type="text" id="openai_model" placeholder="gpt-4o-mini">
+
+        <div class="row" style="margin-top:8px;">
+          <div>
+            <label>Default batch size</label>
+            <input type="number" id="default_batch_size" min="10" placeholder="1000">
+          </div>
+          <div>
+            <label>Default wait between rounds (minutes)</label>
+            <input type="number" id="default_wait_minutes" min="5" placeholder="60">
+          </div>
+        </div>
+
+        <label>AI prompt template <span class="hint">leave blank for the built-in default</span></label>
+        <textarea id="ai_system_prompt" rows="4" placeholder="Built-in default focuses on curiosity-driven, distinct alternatives to the current winner."></textarea>
+      </details>
+
+      <div class="actions">
+        <button id="save_setup">Save</button>
+        <span class="muted small">Keys persist on the server so background campaigns keep running between sessions.</span>
+      </div>
+    </div>
+
+    <div class="card" id="new_campaign_card">
+      <h2>Start a new email test</h2>
+      <p class="muted small">Fill out the four steps below. We send your email to a slice of your list, ask AI to write a competing subject line, see which gets more opens, then move to the next slice with the winner.</p>
+
+      <div class="steps">
+        <div class="step active" data-step="1">1. Who gets it</div>
+        <div class="step" data-step="2">2. What it says</div>
+        <div class="step" data-step="3">3. Preview &amp; test</div>
+        <div class="step" data-step="4">4. Launch</div>
+      </div>
+
+      <h3>1. Who should get this email?</h3>
+      <div class="row">
+        <div>
+          <label>Audience type</label>
+          <select id="audience_type">
+            <option value="tag">Tag</option>
+            <option value="segment">Segment</option>
+          </select>
+        </div>
+        <div>
+          <label>Pick the <span id="audience_label_word">tag</span></label>
+          <select id="audience_id"><option>Loading from Kit…</option></select>
+        </div>
+      </div>
+
+      <h3>2. What does the email say?</h3>
+      <label>Campaign name <span class="hint">just for your records</span></label>
+      <input type="text" id="name" placeholder="e.g. Spring webinar invite">
+
+      <label>Starting subject line <span class="hint">we'll generate AI challengers against this</span></label>
+      <input type="text" id="starting_subject" placeholder="e.g. Discover our brand new strategy today!">
+
+      <label>Email body</label>
+      <div class="editor-wrap"><div id="editor"></div></div>
+
+      <h3>Round settings <span class="hint">— prefilled from defaults; tweak if needed</span></h3>
+      <div class="row">
+        <div>
+          <label>People per round</label>
+          <input type="number" id="batch_size" min="10" placeholder="1000">
+        </div>
+        <div>
+          <label>Wait between rounds (minutes)</label>
+          <input type="number" id="wait_minutes" min="5" placeholder="60">
+        </div>
+      </div>
+      <p class="muted small" id="round_summary"></p>
+
+      <h3>3. Preview &amp; test send</h3>
+      <div class="actions">
+        <button class="btn-ghost" id="preview_btn" type="button">Open preview in new tab</button>
+        <input type="email" id="test_email" placeholder="you@yourcompany.com" style="max-width:260px;">
+        <button class="btn-ghost" id="test_btn" type="button">Send test to that address</button>
+      </div>
+      <p class="muted small">Test send creates a Kit broadcast with [TEST] in the subject. Depending on your Kit account you may need to publish drafts from the Kit UI — we'll tell you if so.</p>
+
+      <h3>4. Ready?</h3>
+      <div class="actions">
+        <button id="launch_btn">Create &amp; launch campaign</button>
+        <span class="muted small">You'll be taken to the live status page after launching.</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Previous campaigns</h2>
+      <div id="campaigns_list">Loading…</div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
+  <script src="/static/js/staff.js"></script>
+</body>
+</html>

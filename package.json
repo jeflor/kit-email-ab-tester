@@ -1,0 +1,21 @@
+{
+  "name": "kit-email-ab-tester",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A/B test Kit (ConvertKit) email subject lines against an AI-generated challenger, batch by batch.",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.10.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "openai": "^4.67.0"
+  }
+}
