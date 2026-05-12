@@ -187,22 +187,48 @@ document.getElementById('preview_btn').addEventListener('click', async () => {
 });
 
 document.getElementById('test_btn').addEventListener('click', async () => {
+  const btn = document.getElementById('test_btn');
+  const result = document.getElementById('test_result');
+
   const lineup = getLineup();
   const subject = lineup[0];
   const email_html = quill.root.innerHTML;
   const test_email = document.getElementById('test_email').value.trim();
   const preview_text = document.getElementById('preview_text').value;
   if (!subject || !email_html.trim() || !test_email) {
-    return banner('warn', 'Need at least one subject line, an email body, and an address to test to.');
+    result.style.color = 'var(--warn)';
+    result.textContent = '✗ Need a subject, body, and email address.';
+    return;
   }
-  const r = await fetch('/api/test-send', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subject, email_html, test_email, preview_text }),
-  });
-  const data = await r.json();
-  if (!r.ok) return banner('error', data.error || 'Test send failed.', 6000);
-  banner('ok', `Test broadcast created in Kit (id ${data.broadcast_id}). ${data.note || ''}`, 8000);
+
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  result.style.color = 'var(--muted)';
+  result.textContent = 'Calling Kit API…';
+
+  try {
+    const r = await fetch('/api/test-send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject, email_html, test_email, preview_text }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      result.style.color = 'var(--bad)';
+      result.textContent = `✗ ${data.error || 'Test send failed.'}`;
+      banner('error', data.error || 'Test send failed.', 8000);
+    } else {
+      result.style.color = 'var(--good)';
+      result.textContent = `✓ Sent to ${test_email} (Kit broadcast id ${data.broadcast_id}). Check your inbox in 30–60s.`;
+    }
+  } catch (err) {
+    result.style.color = 'var(--bad)';
+    result.textContent = `✗ ${err.message}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
 });
 
 document.getElementById('launch_btn').addEventListener('click', async () => {
