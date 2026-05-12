@@ -29,7 +29,7 @@ app.get('/campaigns/:id', (_req, res) => {
 // ─── API: config (no auth — URL is the gate) ────────────────────────────────
 
 const CONFIG_KEYS = [
-  'kit_api_secret',
+  'kit_api_key',
   'openai_api_key',
   'openai_model',
   'ai_system_prompt',
@@ -37,7 +37,7 @@ const CONFIG_KEYS = [
   'default_wait_minutes',
 ];
 
-const SECRET_KEYS = new Set(['kit_api_secret', 'openai_api_key']);
+const SECRET_KEYS = new Set(['kit_api_key', 'openai_api_key']);
 
 app.get('/api/config', (_req, res) => {
   const all = getAllSettings();
@@ -69,7 +69,7 @@ app.get('/api/defaults', (_req, res) => {
   res.json({
     batch_size: parseInt(getSetting('default_batch_size', '1000'), 10),
     wait_minutes: parseInt(getSetting('default_wait_minutes', '60'), 10),
-    kit_configured: !!getSetting('kit_api_secret'),
+    kit_configured: !!getSetting('kit_api_key'),
     openai_configured: !!getSetting('openai_api_key'),
   });
 });
@@ -78,7 +78,7 @@ app.get('/api/defaults', (_req, res) => {
 
 app.get('/api/audiences', async (_req, res) => {
   try {
-    const kitKey = getSetting('kit_api_secret');
+    const kitKey = getSetting('kit_api_key');
     if (!kitKey) return res.status(400).json({ error: 'kit_not_configured' });
     const [tags, segments] = await Promise.all([
       kit.listTags(kitKey),
@@ -209,20 +209,23 @@ app.post('/api/test-send', async (req, res) => {
     if (!subject || !email_html || !test_email) {
       return res.status(400).json({ error: 'missing_fields' });
     }
-    const kitKey = getSetting('kit_api_secret');
+    const kitKey = getSetting('kit_api_key');
     if (!kitKey) return res.status(400).json({ error: 'kit_not_configured' });
 
     let testTagId = getSetting('test_tag_id');
     if (!testTagId) {
       testTagId = await kit.createTag(kitKey, 'kit-ab-test-recipients');
-      setSetting('test_tag_id', testTagId);
+      setSetting('test_tag_id', String(testTagId));
     }
-    await kit.tagSubscriber(kitKey, testTagId, test_email);
-    const broadcastId = await kit.createBroadcast(kitKey, {
-      subject: `[TEST] ${subject}`,
+    // v4: tag the test email (creates the subscriber if not already in Kit)
+    await kit.tagSubscriberByEmail(kitKey, testTagId, test_email);
+    // v4 broadcast send is immediate when send_at is now.
+    const broadcastId = await kit.createTestBroadcast(kitKey, {
+      subject,
       contentHtml: email_html,
+      testTagId,
     });
-    res.json({ ok: true, broadcast_id: broadcastId, note: 'Broadcast created in Kit. If your account doesn\'t auto-send drafts, publish it from the Kit UI.' });
+    res.json({ ok: true, broadcast_id: broadcastId, note: 'Test broadcast sent. Check your inbox.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

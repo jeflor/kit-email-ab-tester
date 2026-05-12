@@ -8,7 +8,19 @@ march through the list until everyone has been hit with an optimized subject.
 Built for non-technical staff: admin pre-loads the API keys, staff just fill in
 the form, preview, test, and click Launch.
 
-## Quick start
+## Deploy (hosted)
+
+One-click deploy to Render (~3 min, ~$8/mo for the always-on service + 1GB persistent disk):
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/jeflor/kit-email-ab-tester)
+
+The repo includes `render.yaml`, so Render auto-detects the build, start command, and persistent disk for SQLite. After deploy, open the URL Render gives you and paste your Kit + OpenAI keys into the Setup panel.
+
+Why the Starter plan and not free: Render's free tier sleeps the service after 15 minutes of no HTTP traffic, which would kill your A/B loop mid-wait. The Starter plan ($7/mo + ~$1/mo for the 1GB disk) stays awake.
+
+Fly.io and Railway also work — see the bottom of this README.
+
+## Run locally
 
 ```bash
 cd kit-email-ab-tester
@@ -60,20 +72,17 @@ public/
   js/staff.js
 ```
 
-## Important Kit API caveat
+## Kit API
 
-This app hits the **ConvertKit v3 API**: `https://api.convertkit.com/v3/...`.
+Uses the **v4 API** at `https://api.kit.com/v4/...` with header auth (`X-Kit-Api-Key`). Generate a v4 key in Kit → Settings → Advanced → API Keys.
 
-**The send-vs-draft question:** Kit's v3 `POST /v3/broadcasts` creates a *broadcast object*. Whether that broadcast actually **sends** without a manual publish step depends on your Kit account / plan. If you find that broadcasts pile up as drafts in your Kit UI rather than sending, you have two options:
+For each A/B half-batch, the runner:
+1. Creates a temp tag (`abtest-c{campaignId}-r{roundNumber}-A-{ts}`)
+2. Bulk-tags the half-batch subscribers via `POST /v4/bulk/tags/subscribers`
+3. Creates a broadcast with `subscriber_filter: [{all: [{type: 'tag', ids: [tempTagId]}]}]` and `send_at: <now>` — Kit sends it immediately
+4. Polls `GET /v4/broadcasts/{id}/stats` after the wait period to compare open rates
 
-1. Run the loop a step at a time and publish each pair manually in the Kit UI (annoying).
-2. Upgrade to the v4 Kit API and switch the client to use the bearer-token endpoint that supports immediate scheduled sends. This would mean editing `src/kit-client.js` to use `https://api.kit.com/v4/broadcasts` and adding the `subscriber_filter` payload — Kit's v4 docs at developers.kit.com cover this.
-
-The test-send endpoint has the same caveat. The UI tells the user that drafts may need a manual publish.
-
-## Sending to specific subscribers
-
-Kit broadcasts target **tags/segments**, not arbitrary subscriber-ID lists. To send each A/B half-batch independently, this app creates a temp tag per half, tags the right subscribers into it, then broadcasts to that tag. Tags are left in place after the round (cheap, no harm) — admin can bulk-delete tags starting with `abtest-` periodically.
+Temp tags accumulate over time (no cleanup endpoint applied). Bulk-delete tags whose names start with `abtest-` in the Kit UI periodically if you care.
 
 ## Deploy notes
 

@@ -1,184 +1,182 @@
-// Kit (ConvertKit) v3 API client.
+// Kit v4 API client.
 //
-// Notes on send strategy:
-//   ConvertKit v3 broadcasts are normally targeted at tags/segments, not
-//   ad-hoc subscriber-ID lists. So for each A/B half-batch we:
-//     1. Create a short-lived "test tag" in Kit.
-//     2. Tag the chosen subscribers with it.
-//     3. Create a broadcast and publish it to that tag.
-//     4. After the wait+evaluate cycle, untag the subscribers and remove the tag.
+// Auth: header `X-Kit-Api-Key: <token>`. Generate one at
+//   Kit → Settings → Advanced → API Keys (the V4 key, not the legacy secret).
 //
-//   The legacy v3 endpoints we use:
-//     GET    /v3/tags?api_secret=...
-//     POST   /v3/tags
-//     POST   /v3/tags/{id}/subscribe
-//     DELETE /v3/subscribers/{id}/tags/{tag_id}
-//     GET    /v3/tags/{id}/subscriptions
-//     GET    /v3/segments/{id}/subscribers   (some accounts; segments may need v4)
-//     POST   /v3/broadcasts
-//     GET    /v3/broadcasts/{id}/stats
+// Why v4 over v3:
+//   - v3 broadcasts API mostly creates drafts; the actual "send" trigger is
+//     ambiguous and was the failure mode in the original Manus build.
+//   - v4 broadcasts can be created AND sent in one call by providing
+//     `published_at` (immediate) or `send_at` (scheduled), with a
+//     `subscriber_filter` to target a specific tag/segment.
+//   - v4 has `POST /v4/bulk/tags/subscribers` for tagging hundreds of
+//     subscribers in one round-trip — much faster than per-subscriber calls.
 //
-//   Kit's v3 endpoints take api_secret as a query param. Some accounts
-//   require the v4 API + bearer token instead — see README for the
-//   migration knobs if v3 calls return 401.
+// Send strategy for each A/B half-batch:
+//   1. Create a temp tag for the half (so subscriber_filter can target it).
+//   2. Bulk-tag the chosen subscribers into it.
+//   3. Create the broadcast with `subscriber_filter: [{all: [{type:'tag', ids:[temp_tag_id]}]}]`
+//      and `send_at: <ISO now>` → Kit sends it.
+//   4. Stats endpoint reports recipients + open_rate as the round progresses.
 
-const KIT_BASE = 'https://api.convertkit.com/v3';
+const KIT_BASE = 'https://api.kit.com/v4';
 
-function requireKey(apiSecret) {
-  if (!apiSecret) {
-    const err = new Error('Kit API secret not configured. An admin needs to set it in /admin.');
+function requireKey(apiKey) {
+  if (!apiKey) {
+    const err = new Error('Kit v4 API key not set. Paste it in the Setup panel.');
     err.userFacing = true;
     throw err;
   }
 }
 
-async function kitGet(path, apiSecret, query = {}) {
-  requireKey(apiSecret);
-  const params = new URLSearchParams({ api_secret: apiSecret, ...query });
-  const res = await fetch(`${KIT_BASE}${path}?${params}`);
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Kit GET ${path} failed: ${res.status} ${body.slice(0, 300)}`);
-  }
-  return res.json();
-}
-
-async function kitPost(path, apiSecret, body) {
-  requireKey(apiSecret);
-  const res = await fetch(`${KIT_BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ api_secret: apiSecret, ...body }),
+async function kitFetch(method, path, apiKey, { query, body } = {}) {
+  requireKey(apiKey);
+  const qs = query ? '?' + new URLSearchParams(query) : '';
+  const res = await fetch(`${KIT_BASE}${path}${qs}`, {
+    method,
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'X-Kit-Api-Key': apiKey,
+    },
+    body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Kit POST ${path} failed: ${res.status} ${text.slice(0, 300)}`);
+    throw new Error(`Kit ${method} ${path} → ${res.status}: ${text.slice(0, 300)}`);
   }
-  return res.json();
+  // Some DELETE responses are empty
+  const text = await res.text();
+  return text ? JSON.parse(text) : {};
 }
 
-async function kitDelete(path, apiSecret, body) {
-  requireKey(apiSecret);
-  const res = await fetch(`${KIT_BASE}${path}`, {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ api_secret: apiSecret, ...body }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Kit DELETE ${path} failed: ${res.status} ${text.slice(0, 300)}`);
-  }
-  return res.json();
+async function listTags(apiKey) {
+  const data = await kitFetch('GET', '/tags', apiKey, { query: { per_page: 500 } });
+  return (data.tags || []).map(t => ({ id: t.id, name: t.name }));
 }
 
-async function listTags(apiSecret) {
-  const data = await kitGet('/tags', apiSecret);
-  return (data.tags || []).map(t => ({ id: String(t.id), name: t.name }));
-}
-
-async function listSegments(apiSecret) {
-  // Older accounts may not expose segments on v3; return empty rather than throwing
-  // so the UI can fall back to tags-only.
+async function listSegments(apiKey) {
   try {
-    const data = await kitGet('/segments', apiSecret);
-    return (data.segments || []).map(s => ({ id: String(s.id), name: s.name }));
+    const data = await kitFetch('GET', '/segments', apiKey, { query: { per_page: 500 } });
+    return (data.segments || []).map(s => ({ id: s.id, name: s.name }));
   } catch (_e) {
     return [];
   }
 }
 
-async function createTag(apiSecret, name) {
-  const data = await kitPost('/tags', apiSecret, { tag: { name } });
-  // Different Kit responses use either {tag: {id}} or [{id}]; normalize
-  const tag = Array.isArray(data) ? data[0] : data.tag || data;
-  return String(tag.id);
+async function tagSubscriberByEmail(apiKey, tagId, email) {
+  return kitFetch('POST', `/tags/${tagId}/subscribers`, apiKey, {
+    body: { email_address: email },
+  });
 }
 
-async function tagSubscriber(apiSecret, tagId, email) {
-  return kitPost(`/tags/${tagId}/subscribe`, apiSecret, { email });
+async function createTag(apiKey, name) {
+  const data = await kitFetch('POST', '/tags', apiKey, { body: { name } });
+  const tag = data.tag || data;
+  if (!tag.id) throw new Error('Kit createTag returned no id');
+  return tag.id;
 }
 
-async function untagSubscriber(apiSecret, subscriberId, tagId) {
-  return kitDelete(`/subscribers/${subscriberId}/tags/${tagId}`, apiSecret);
-}
-
-async function fetchAllSubscribersForAudience(apiSecret, audienceType, audienceId) {
+// Paginated fetch of all subscribers for a tag or segment. v4 uses
+// cursor-based pagination: response includes pagination.next_cursor.
+async function fetchAllSubscribersForAudience(apiKey, audienceType, audienceId) {
   const out = [];
-  let page = 1;
+  let cursor;
+  const path = audienceType === 'segment'
+    ? `/segments/${audienceId}/subscribers`
+    : `/tags/${audienceId}/subscribers`;
+
   while (true) {
-    const path = audienceType === 'segment'
-      ? `/segments/${audienceId}/subscribers`
-      : `/tags/${audienceId}/subscriptions`;
-    const data = await kitGet(path, apiSecret, { page, sort_order: 'asc' });
-    let batch;
-    if (audienceType === 'segment') {
-      batch = (data.subscribers || []).map(s => ({ id: s.id, email: s.email_address }));
-    } else {
-      batch = (data.subscriptions || [])
-        .filter(s => s.subscriber)
-        .map(s => ({ id: s.subscriber.id, email: s.subscriber.email_address }));
-    }
+    const query = { per_page: 500 };
+    if (cursor) query.after = cursor;
+    const data = await kitFetch('GET', path, apiKey, { query });
+    const batch = (data.subscribers || []).map(s => ({ id: s.id, email: s.email_address }));
     out.push(...batch);
-    if (batch.length < 50) break;
-    page += 1;
-    if (page > 5000) throw new Error('Pagination runaway (>5000 pages)');
+    const next = data.pagination?.end_cursor && data.pagination?.has_next_page
+      ? data.pagination.end_cursor : null;
+    if (!next) break;
+    cursor = next;
+    if (out.length > 500_000) throw new Error('Pagination runaway (>500k subscribers)');
   }
   return out;
 }
 
-async function createBroadcast(apiSecret, { subject, contentHtml }) {
-  const data = await kitPost('/broadcasts', apiSecret, {
+// Bulk-tag up to ~1000 subscribers in one call. Kit v4 accepts an array
+// of {tag_id, subscriber_id} pairs.
+async function bulkTagSubscribers(apiKey, tagId, subscribers) {
+  if (!subscribers.length) return;
+  const CHUNK = 1000;
+  for (let i = 0; i < subscribers.length; i += CHUNK) {
+    const slice = subscribers.slice(i, i + CHUNK);
+    const taggings = slice.map(s => ({ tag_id: tagId, subscriber_id: s.id }));
+    await kitFetch('POST', '/bulk/tags/subscribers', apiKey, { body: { taggings } });
+  }
+}
+
+// Bulk-untag — same endpoint but DELETE. Best-effort cleanup.
+async function bulkUntagSubscribers(apiKey, tagId, subscribers) {
+  if (!subscribers.length) return;
+  const CHUNK = 1000;
+  for (let i = 0; i < subscribers.length; i += CHUNK) {
+    const slice = subscribers.slice(i, i + CHUNK);
+    const taggings = slice.map(s => ({ tag_id: tagId, subscriber_id: s.id }));
+    try {
+      await kitFetch('DELETE', '/bulk/tags/subscribers', apiKey, { body: { taggings } });
+    } catch (_e) { /* best-effort */ }
+  }
+}
+
+// Create AND send a broadcast targeting a single tag (the temp tag we just
+// applied to the half-batch). Setting send_at to now triggers immediate send.
+async function createAndSendBroadcast(apiKey, { subject, contentHtml, targetTagId, fromEmail }) {
+  const nowIso = new Date().toISOString();
+  const body = {
     subject,
     content: contentHtml,
+    description: subject,
     public: false,
-  });
+    published_at: nowIso,
+    send_at: nowIso,
+    subscriber_filter: [{ all: [{ type: 'tag', ids: [targetTagId] }] }],
+  };
+  if (fromEmail) body.email_address = fromEmail;
+  const data = await kitFetch('POST', '/broadcasts', apiKey, { body });
   const id = data.broadcast?.id ?? data.id;
   if (!id) throw new Error('Kit broadcast created but no id returned');
-  return String(id);
+  return id;
 }
 
-async function getBroadcastStats(apiSecret, broadcastId) {
-  const data = await kitGet(`/broadcasts/${broadcastId}/stats`, apiSecret);
-  const stats = data.broadcast?.stats || data.stats || {};
-  const opens = stats.open_count ?? stats.opens ?? 0;
-  const recipients = stats.recipient_count ?? stats.recipients ?? 0;
-  return { opens, recipients, openRate: recipients ? (opens / recipients) * 100 : 0 };
+// Test send — uses a "Test Recipient" tag we maintain just for previews.
+async function createTestBroadcast(apiKey, { subject, contentHtml, testTagId, fromEmail }) {
+  return createAndSendBroadcast(apiKey, {
+    subject: `[TEST] ${subject}`,
+    contentHtml,
+    targetTagId: testTagId,
+    fromEmail,
+  });
 }
 
-// Tag a batch of subscribers in parallel (capped concurrency so we don't hammer the API).
-async function tagSubscribersBatch(apiSecret, tagId, subscribers, concurrency = 5) {
-  let i = 0;
-  async function worker() {
-    while (i < subscribers.length) {
-      const idx = i++;
-      const sub = subscribers[idx];
-      await tagSubscriber(apiSecret, tagId, sub.email);
-    }
-  }
-  await Promise.all(Array.from({ length: concurrency }, worker));
-}
-
-async function untagSubscribersBatch(apiSecret, tagId, subscribers, concurrency = 5) {
-  let i = 0;
-  async function worker() {
-    while (i < subscribers.length) {
-      const idx = i++;
-      const sub = subscribers[idx];
-      try { await untagSubscriber(apiSecret, sub.id, tagId); } catch (_e) { /* best-effort */ }
-    }
-  }
-  await Promise.all(Array.from({ length: concurrency }, worker));
+async function getBroadcastStats(apiKey, broadcastId) {
+  const data = await kitFetch('GET', `/broadcasts/${broadcastId}/stats`, apiKey);
+  const stats = data.broadcast?.stats || {};
+  const opens = stats.emails_opened ?? 0;
+  const recipients = stats.recipients ?? 0;
+  // v4 returns open_rate as a percentage already (e.g. 23.4 means 23.4%)
+  const openRate = typeof stats.open_rate === 'number'
+    ? stats.open_rate
+    : (recipients ? (opens / recipients) * 100 : 0);
+  return { opens, recipients, openRate, status: stats.status, progress: stats.progress };
 }
 
 module.exports = {
   listTags,
   listSegments,
   createTag,
-  tagSubscriber,
-  untagSubscriber,
-  tagSubscribersBatch,
-  untagSubscribersBatch,
+  tagSubscriberByEmail,
   fetchAllSubscribersForAudience,
-  createBroadcast,
+  bulkTagSubscribers,
+  bulkUntagSubscribers,
+  createAndSendBroadcast,
+  createTestBroadcast,
   getBroadcastStats,
 };

@@ -69,7 +69,7 @@ async function performSend(campaignId) {
   const campaign = getCampaign(campaignId);
   if (!campaign || campaign.status !== 'running') return;
 
-  const kitKey = getSetting('kit_api_secret');
+  const kitKey = getSetting('kit_api_key');
   const openaiKey = getSetting('openai_api_key');
   const openaiModel = getSetting('openai_model', 'gpt-4o-mini');
   const systemPrompt = getSetting('ai_system_prompt');
@@ -111,22 +111,24 @@ async function performSend(campaignId) {
     challenger_subject: challenger,
   });
 
-  // Temp tags so we can target each half-batch via broadcast.
-  const winnerTagName = `abtest-c${campaignId}-r${roundNumber}-A-${Date.now()}`;
-  const challengerTagName = `abtest-c${campaignId}-r${roundNumber}-B-${Date.now()}`;
-  const winnerTagId = await kit.createTag(kitKey, winnerTagName);
-  const challengerTagId = await kit.createTag(kitKey, challengerTagName);
+  // Temp tags so subscriber_filter can target each half-batch.
+  const stamp = Date.now();
+  const winnerTagId = await kit.createTag(kitKey, `abtest-c${campaignId}-r${roundNumber}-A-${stamp}`);
+  const challengerTagId = await kit.createTag(kitKey, `abtest-c${campaignId}-r${roundNumber}-B-${stamp}`);
 
-  await kit.tagSubscribersBatch(kitKey, winnerTagId, groupA);
-  await kit.tagSubscribersBatch(kitKey, challengerTagId, groupB);
+  await kit.bulkTagSubscribers(kitKey, winnerTagId, groupA);
+  await kit.bulkTagSubscribers(kitKey, challengerTagId, groupB);
 
-  const winnerBroadcastId = await kit.createBroadcast(kitKey, {
+  // v4: created broadcast sends immediately because send_at is "now".
+  const winnerBroadcastId = await kit.createAndSendBroadcast(kitKey, {
     subject: campaign.current_winner,
     contentHtml: campaign.email_html,
+    targetTagId: winnerTagId,
   });
-  const challengerBroadcastId = await kit.createBroadcast(kitKey, {
+  const challengerBroadcastId = await kit.createAndSendBroadcast(kitKey, {
     subject: challenger,
     contentHtml: campaign.email_html,
+    targetTagId: challengerTagId,
   });
 
   updateRound(roundId, {
@@ -152,7 +154,7 @@ async function performEvaluate(campaignId) {
   const campaign = getCampaign(campaignId);
   if (!campaign || campaign.status !== 'running') return;
 
-  const kitKey = getSetting('kit_api_secret');
+  const kitKey = getSetting('kit_api_key');
   const round = getActiveRound(campaignId, campaign.current_round);
   if (!round) return;
 

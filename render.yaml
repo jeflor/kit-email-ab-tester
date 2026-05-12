@@ -1,0 +1,26 @@
+# Render.com blueprint.
+# To deploy:
+#   1. Sign in at https://render.com
+#   2. New + → Blueprint → connect this GitHub repo
+#   3. Render reads this file, fills in everything, click Apply
+#   4. After ~3 minutes you'll get a URL like https://kit-email-ab-tester.onrender.com
+#   5. Open the URL → paste your Kit + OpenAI keys in the Setup panel → go
+#
+# Note: the "starter" plan ($7/mo) is used so the service never sleeps —
+# the free plan would kill your A/B loop after 15 minutes of inactivity.
+services:
+  - type: web
+    name: kit-email-ab-tester
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DB_PATH
+        value: /var/data/kit-ab.db
+      - key: NODE_ENV
+        value: production

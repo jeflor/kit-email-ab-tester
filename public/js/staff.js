@@ -36,7 +36,7 @@ function showSetup(show) {
 async function loadConfig() {
   const r = await fetch('/api/config');
   const c = await r.json();
-  document.getElementById('kit_api_secret').placeholder = c.kit_api_secret_set ? `set (${c.kit_api_secret}) — paste new value to change` : 'not set';
+  document.getElementById('kit_api_key').placeholder = c.kit_api_key_set ? `set (${c.kit_api_key}) — paste new value to change` : 'not set';
   document.getElementById('openai_api_key').placeholder = c.openai_api_key_set ? `set (${c.openai_api_key}) — paste new value to change` : 'not set';
   document.getElementById('openai_model').value = c.openai_model || '';
   document.getElementById('default_batch_size').value = c.default_batch_size || '';
@@ -47,7 +47,7 @@ async function loadConfig() {
 
 document.getElementById('save_setup').addEventListener('click', async () => {
   const payload = {
-    kit_api_secret: document.getElementById('kit_api_secret').value,
+    kit_api_key: document.getElementById('kit_api_key').value,
     openai_api_key: document.getElementById('openai_api_key').value,
     openai_model: document.getElementById('openai_model').value,
     default_batch_size: document.getElementById('default_batch_size').value,
@@ -61,7 +61,7 @@ document.getElementById('save_setup').addEventListener('click', async () => {
   });
   if (r.ok) {
     banner('ok', 'Saved.');
-    document.getElementById('kit_api_secret').value = '';
+    document.getElementById('kit_api_key').value = '';
     document.getElementById('openai_api_key').value = '';
     await loadDefaults();
     await loadConfig();
