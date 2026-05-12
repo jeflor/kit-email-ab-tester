@@ -229,13 +229,13 @@ document.getElementById('cleanup_tests_btn').addEventListener('click', async (e)
       result.textContent = 'No [TEST] broadcasts found.';
       return;
     }
-    if (!confirm(`Found ${data.count} broadcast${data.count === 1 ? '' : 's'} with [TEST] in the subject.\n\nDelete all of them from Kit? This cannot be undone.`)) {
+    if (!confirm(`Found ${data.count} broadcast${data.count === 1 ? '' : 's'} with [TEST] in the subject.\n\nWill attempt to delete via Kit API. Note: Kit's API doesn't allow deleting already-sent broadcasts (most test sends fall into that bucket), so a manual cleanup in Kit's UI may still be needed.`)) {
       result.style.color = 'var(--muted)';
       result.textContent = 'Cancelled.';
       return;
     }
     result.style.color = 'var(--muted)';
-    result.textContent = `Deleting ${data.count}…`;
+    result.textContent = `Working through ${data.count}…`;
     const r2 = await fetch('/api/test-broadcasts', { method: 'DELETE' });
     const data2 = await r2.json();
     if (!r2.ok) {
@@ -243,8 +243,13 @@ document.getElementById('cleanup_tests_btn').addEventListener('click', async (e)
       result.textContent = `✗ ${data2.error || 'Cleanup failed.'}`;
       return;
     }
-    result.style.color = 'var(--good)';
-    result.textContent = `✓ Deleted ${data2.deleted}${data2.failed ? ` (${data2.failed} failed)` : ''}.`;
+    const parts = [];
+    if (data2.deleted) parts.push(`✓ Deleted ${data2.deleted}`);
+    if (data2.already_sent) parts.push(`⚠ ${data2.already_sent} already sent (Kit API won't delete these)`);
+    if (data2.other_failed) parts.push(`✗ ${data2.other_failed} failed`);
+    result.style.color = data2.already_sent && !data2.deleted ? 'var(--warn)' : 'var(--good)';
+    result.innerHTML = parts.join(' · ') +
+      (data2.already_sent ? ` — <a href="https://app.kit.com/broadcasts" target="_blank" rel="noopener">open Kit Broadcasts</a> to delete them manually.` : '');
   } catch (err) {
     result.style.color = 'var(--bad)';
     result.textContent = `✗ ${err.message}`;

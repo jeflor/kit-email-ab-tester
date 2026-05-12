@@ -313,11 +313,18 @@ app.delete('/api/test-broadcasts', async (_req, res) => {
     const all = await kit.listBroadcasts(kitKey);
     const tests = all.filter(b => typeof b.subject === 'string' && b.subject.startsWith('[TEST] '));
     let deleted = 0;
-    let failed = 0;
+    let alreadySent = 0;       // Kit returns 422 "Broadcast has already been sent."
+    let otherFailed = 0;
     for (const t of tests) {
-      try { await kit.deleteBroadcast(kitKey, t.id); deleted++; } catch (_e) { failed++; }
+      try {
+        await kit.deleteBroadcast(kitKey, t.id);
+        deleted++;
+      } catch (e) {
+        if (/already been sent/i.test(e.message || '')) alreadySent++;
+        else otherFailed++;
+      }
     }
-    res.json({ ok: true, deleted, failed });
+    res.json({ ok: true, deleted, already_sent: alreadySent, other_failed: otherFailed });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
