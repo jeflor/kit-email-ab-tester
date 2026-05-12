@@ -212,6 +212,15 @@ app.post('/api/campaigns/:id/resume', (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/campaigns/:id/retry', (req, res) => {
+  try {
+    runner.retry(Number(req.params.id));
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // ─── API: preview + test send ───────────────────────────────────────────────
 
 app.post('/api/preview', (req, res) => {

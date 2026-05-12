@@ -252,6 +252,24 @@ function resume(campaignId) {
   scheduleTick(campaignId, campaign.next_run_at || now());
 }
 
+// Retry an errored campaign. Removes any round records that didn't make it
+// to "sent" state (no broadcast IDs attached), resets last_error, and
+// restarts the loop from the current_round + 1.
+function retry(campaignId) {
+  const campaign = getCampaign(campaignId);
+  if (!campaign) throw new Error('Campaign not found');
+  if (campaign.status !== 'error') throw new Error(`Cannot retry — campaign is ${campaign.status}`);
+  // Delete any half-baked round records (sent_at is null)
+  db.prepare('DELETE FROM rounds WHERE campaign_id = ? AND sent_at IS NULL').run(campaignId);
+  updateCampaign(campaignId, {
+    status: 'running',
+    next_action: 'send',
+    next_run_at: now(),
+    last_error: null,
+  });
+  scheduleTick(campaignId, now());
+}
+
 function resumeAll() {
   const rows = db.prepare(
     "SELECT id, next_run_at FROM campaigns WHERE status = 'running'"
@@ -262,4 +280,4 @@ function resumeAll() {
   return rows.length;
 }
 
-module.exports = { start, pause, resume, resumeAll };
+module.exports = { start, pause, resume, retry, resumeAll };

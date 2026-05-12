@@ -33,6 +33,7 @@
       <div class="actions">
         <button class="btn-ghost" id="pause_btn" style="display:none;">Pause</button>
         <button id="resume_btn" style="display:none;">Resume</button>
+        <button id="retry_btn" style="display:none;">Retry</button>
         <a href="/" class="btn btn-ghost">← Back to dashboard</a>
       </div>
       <p class="small" id="error_text" style="color: var(--bad); display:none;"></p>
@@ -69,6 +70,7 @@
 
       document.getElementById('pause_btn').style.display = campaign.status === 'running' ? '' : 'none';
       document.getElementById('resume_btn').style.display = campaign.status === 'paused' ? '' : 'none';
+      document.getElementById('retry_btn').style.display = campaign.status === 'error' ? '' : 'none';
 
       const err = document.getElementById('error_text');
       if (campaign.last_error) {
@@ -110,6 +112,15 @@
     });
     document.getElementById('resume_btn').addEventListener('click', async () => {
       await fetch(`/api/campaigns/${id}/resume`, { method: 'POST' });
+      refresh();
+    });
+    document.getElementById('retry_btn').addEventListener('click', async () => {
+      if (!confirm('Retry from where it failed?\n\nAny partially-created round (no broadcasts sent) will be discarded so we can re-run cleanly.')) return;
+      const r = await fetch(`/api/campaigns/${id}/retry`, { method: 'POST' });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        alert(`Retry failed: ${data.error || r.statusText}`);
+      }
       refresh();
     });
     refresh();
