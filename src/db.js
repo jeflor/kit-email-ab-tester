@@ -31,6 +31,7 @@ db.exec(`
     starting_subject TEXT NOT NULL,
     current_winner TEXT NOT NULL,
     subject_lineup TEXT NOT NULL DEFAULT '[]', -- JSON array; index 0 is starting subject, rest are challengers in order
+    preview_text TEXT NOT NULL DEFAULT '',     -- preheader/inbox preview snippet; same for all variations
     email_html TEXT NOT NULL,
     batch_size INTEGER NOT NULL DEFAULT 1000,
     wait_seconds INTEGER NOT NULL DEFAULT 3600,
@@ -70,6 +71,7 @@ db.exec(`
 `);
 
 ensureColumn('campaigns', 'subject_lineup', "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('campaigns', 'preview_text', "TEXT NOT NULL DEFAULT ''");
 
 function getSetting(key, fallback = null) {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);

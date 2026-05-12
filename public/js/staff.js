@@ -165,15 +165,21 @@ document.getElementById('audience_type').addEventListener('change', renderAudien
 document.getElementById('batch_size').addEventListener('input', refreshRoundSummary);
 document.getElementById('wait_minutes').addEventListener('input', refreshRoundSummary);
 document.getElementById('subject_lineup').addEventListener('input', refreshRoundSummary);
+document.getElementById('preview_text').addEventListener('input', () => {
+  const v = document.getElementById('preview_text').value;
+  const note = !v ? '' : v.length > 100 ? `${v.length} chars · may be truncated on mobile` : `${v.length} chars`;
+  document.getElementById('preview_text_count').textContent = note;
+});
 
 document.getElementById('preview_btn').addEventListener('click', async () => {
   const lineup = getLineup();
   const subject = lineup[0] || '(no subject — add at least one in step 2)';
   const email_html = quill.root.innerHTML;
+  const preview_text = document.getElementById('preview_text').value;
   const r = await fetch('/api/preview', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subject, email_html }),
+    body: JSON.stringify({ subject, email_html, preview_text }),
   });
   const html = await r.text();
   const w = window.open('', '_blank');
@@ -185,13 +191,14 @@ document.getElementById('test_btn').addEventListener('click', async () => {
   const subject = lineup[0];
   const email_html = quill.root.innerHTML;
   const test_email = document.getElementById('test_email').value.trim();
+  const preview_text = document.getElementById('preview_text').value;
   if (!subject || !email_html.trim() || !test_email) {
     return banner('warn', 'Need at least one subject line, an email body, and an address to test to.');
   }
   const r = await fetch('/api/test-send', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subject, email_html, test_email }),
+    body: JSON.stringify({ subject, email_html, test_email, preview_text }),
   });
   const data = await r.json();
   if (!r.ok) return banner('error', data.error || 'Test send failed.', 6000);
@@ -210,6 +217,7 @@ document.getElementById('launch_btn').addEventListener('click', async () => {
     audience_id: document.getElementById('audience_id').value,
     audience_label: document.getElementById('audience_id').selectedOptions[0]?.textContent || '',
     subject_lineup: lineup,
+    preview_text: document.getElementById('preview_text').value,
     email_html: quill.root.innerHTML,
     batch_size: document.getElementById('batch_size').value,
     wait_minutes: document.getElementById('wait_minutes').value,

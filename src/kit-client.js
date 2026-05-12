@@ -128,7 +128,7 @@ async function bulkUntagSubscribers(apiKey, tagId, subscribers) {
 
 // Create AND send a broadcast targeting a single tag (the temp tag we just
 // applied to the half-batch). Setting send_at to now triggers immediate send.
-async function createAndSendBroadcast(apiKey, { subject, contentHtml, targetTagId, fromEmail }) {
+async function createAndSendBroadcast(apiKey, { subject, contentHtml, previewText, targetTagId, fromEmail }) {
   const nowIso = new Date().toISOString();
   const body = {
     subject,
@@ -139,6 +139,7 @@ async function createAndSendBroadcast(apiKey, { subject, contentHtml, targetTagI
     send_at: nowIso,
     subscriber_filter: [{ all: [{ type: 'tag', ids: [targetTagId] }] }],
   };
+  if (previewText) body.preview_text = previewText;
   if (fromEmail) body.email_address = fromEmail;
   const data = await kitFetch('POST', '/broadcasts', apiKey, { body });
   const id = data.broadcast?.id ?? data.id;
@@ -147,10 +148,11 @@ async function createAndSendBroadcast(apiKey, { subject, contentHtml, targetTagI
 }
 
 // Test send — uses a "Test Recipient" tag we maintain just for previews.
-async function createTestBroadcast(apiKey, { subject, contentHtml, testTagId, fromEmail }) {
+async function createTestBroadcast(apiKey, { subject, contentHtml, previewText, testTagId, fromEmail }) {
   return createAndSendBroadcast(apiKey, {
     subject: `[TEST] ${subject}`,
     contentHtml,
+    previewText,
     targetTagId: testTagId,
     fromEmail,
   });

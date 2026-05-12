@@ -128,11 +128,13 @@ async function performSend(campaignId) {
   const winnerBroadcastId = await kit.createAndSendBroadcast(kitKey, {
     subject: campaign.current_winner,
     contentHtml: campaign.email_html,
+    previewText: campaign.preview_text || '',
     targetTagId: winnerTagId,
   });
   const challengerBroadcastId = await kit.createAndSendBroadcast(kitKey, {
     subject: challenger,
     contentHtml: campaign.email_html,
+    previewText: campaign.preview_text || '',
     targetTagId: challengerTagId,
   });
 

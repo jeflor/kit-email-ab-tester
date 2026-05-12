@@ -116,6 +116,7 @@ app.post('/api/campaigns', (req, res) => {
     audience_id,
     audience_label,
     subject_lineup,        // array of subject strings (at least 2)
+    preview_text,          // shared across all variations
     email_html,
     batch_size,
     wait_minutes,
@@ -141,12 +142,12 @@ app.post('/api/campaigns', (req, res) => {
   const result = db.prepare(`
     INSERT INTO campaigns (
       name, audience_type, audience_id, audience_label,
-      starting_subject, current_winner, subject_lineup, email_html,
+      starting_subject, current_winner, subject_lineup, preview_text, email_html,
       batch_size, wait_seconds,
       status, created_at, updated_at
     ) VALUES (
       @name, @audience_type, @audience_id, @audience_label,
-      @starting_subject, @starting_subject, @subject_lineup, @email_html,
+      @starting_subject, @starting_subject, @subject_lineup, @preview_text, @email_html,
       @batch_size, @wait_seconds,
       'draft', @ts, @ts
     )
@@ -155,6 +156,7 @@ app.post('/api/campaigns', (req, res) => {
     audience_label: audience_label || '',
     starting_subject: lineup[0],
     subject_lineup: JSON.stringify(lineup),
+    preview_text: String(preview_text || '').trim(),
     email_html,
     batch_size: finalBatch,
     wait_seconds: finalWaitMin * 60,
@@ -185,24 +187,45 @@ app.post('/api/campaigns/:id/resume', (req, res) => {
 // ─── API: preview + test send ───────────────────────────────────────────────
 
 app.post('/api/preview', (req, res) => {
-  const { subject = '(no subject)', email_html = '' } = req.body || {};
-  const safeSubject = String(subject).replace(/[<>]/g, '');
+  const { subject = '(no subject)', email_html = '', preview_text = '' } = req.body || {};
+  const stripTags = s => String(s).replace(/[<>]/g, '');
+  const safeSubject = stripTags(subject);
+  const safePreview = stripTags(preview_text);
   res.type('html').send(`<!doctype html>
 <html><head><meta charset="utf-8"><title>Preview</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f4f5f7; margin: 0; padding: 24px; }
+  .inbox { max-width: 640px; margin: 0 auto 16px; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); padding: 12px 16px; }
+  .inbox .from { font-weight: 600; font-size: 14px; color: #222; }
+  .inbox .row { display: flex; gap: 6px; font-size: 14px; margin-top: 2px; }
+  .inbox .subj { font-weight: 600; color: #1c1e21; }
+  .inbox .pre { color: #65676b; }
+  .inbox .pre::before { content: " — "; }
   .frame { max-width: 640px; margin: 0 auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); overflow: hidden; }
   .meta { padding: 16px 20px; border-bottom: 1px solid #eee; }
-  .meta .from { color: #666; font-size: 13px; }
+  .meta .label { color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .meta .from { color: #666; font-size: 13px; margin-top: 4px; }
   .meta .subject { font-size: 18px; font-weight: 600; margin-top: 4px; }
+  .meta .preview { font-size: 13px; color: #65676b; margin-top: 4px; }
   .body { padding: 24px 20px; font-size: 15px; line-height: 1.55; color: #222; }
   .body img { max-width: 100%; height: auto; }
+  h4 { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 8px; max-width: 640px; margin-left: auto; margin-right: auto; }
 </style></head>
 <body>
+  <h4>Inbox preview</h4>
+  <div class="inbox">
+    <div class="from">Your Sender Name</div>
+    <div class="row">
+      <span class="subj">${safeSubject}</span>${safePreview ? `<span class="pre">${safePreview}</span>` : ''}
+    </div>
+  </div>
+
+  <h4>Opened email</h4>
   <div class="frame">
     <div class="meta">
       <div class="from">From: Your Sender Name &lt;you@example.com&gt;</div>
       <div class="subject">${safeSubject}</div>
+      ${safePreview ? `<div class="preview">${safePreview}</div>` : ''}
     </div>
     <div class="body">${email_html}</div>
   </div>
@@ -211,7 +234,7 @@ app.post('/api/preview', (req, res) => {
 
 app.post('/api/test-send', async (req, res) => {
   try {
-    const { subject, email_html, test_email } = req.body || {};
+    const { subject, email_html, test_email, preview_text } = req.body || {};
     if (!subject || !email_html || !test_email) {
       return res.status(400).json({ error: 'missing_fields' });
     }
@@ -229,6 +252,7 @@ app.post('/api/test-send', async (req, res) => {
     const broadcastId = await kit.createTestBroadcast(kitKey, {
       subject,
       contentHtml: email_html,
+      previewText: preview_text || '',
       testTagId,
     });
     res.json({ ok: true, broadcast_id: broadcastId, note: 'Test broadcast sent. Check your inbox.' });
