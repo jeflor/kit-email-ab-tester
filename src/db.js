@@ -72,6 +72,8 @@ db.exec(`
 
 ensureColumn('campaigns', 'subject_lineup', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('campaigns', 'preview_text', "TEXT NOT NULL DEFAULT ''");
+ensureColumn('campaigns', 'audience_include_tags', "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('campaigns', 'audience_exclude_tags', "TEXT NOT NULL DEFAULT '[]'");
 
 function getSetting(key, fallback = null) {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);

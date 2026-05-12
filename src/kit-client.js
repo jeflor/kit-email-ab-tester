@@ -77,26 +77,14 @@ async function createTag(apiKey, name) {
   return tag.id;
 }
 
-// Paginated fetch of all subscribers in a tag. v4 uses cursor-based
-// pagination: response includes pagination.end_cursor + has_next_page.
-//
-// Note: segments are NOT supported. Kit v4 exposes `GET /v4/segments`
-// to list saved segments, but there is no endpoint to enumerate the
-// subscribers in a segment — segments are dynamic filters Kit resolves
-// at broadcast send time. Since our A/B flow needs to split subscribers
-// into halves, we can't use segments. Tags only.
-async function fetchAllSubscribersForAudience(apiKey, audienceType, audienceId) {
-  if (audienceType === 'segment') {
-    const err = new Error('Kit v4 does not expose segment members via API. Create a tag in Kit (Subscribers → Tags → New), tag the people you want to test, and pick the tag here instead.');
-    err.userFacing = true;
-    throw err;
-  }
+// Fetch all subscribers in a single tag, cursor-paginated.
+async function fetchSubscribersInTag(apiKey, tagId) {
   const out = [];
   let cursor;
   while (true) {
     const query = { per_page: 500 };
     if (cursor) query.after = cursor;
-    const data = await kitFetch('GET', `/tags/${audienceId}/subscribers`, apiKey, { query });
+    const data = await kitFetch('GET', `/tags/${tagId}/subscribers`, apiKey, { query });
     const batch = (data.subscribers || []).map(s => ({ id: s.id, email: s.email_address }));
     out.push(...batch);
     const next = data.pagination?.end_cursor && data.pagination?.has_next_page
@@ -106,6 +94,36 @@ async function fetchAllSubscribersForAudience(apiKey, audienceType, audienceId) 
     if (out.length > 500_000) throw new Error('Pagination runaway (>500k subscribers)');
   }
   return out;
+}
+
+// Build a campaign audience from include + exclude tag lists.
+//   include: array of tag IDs — anyone in ANY of these tags qualifies (union)
+//   exclude: array of tag IDs — anyone in any of these is removed
+// Returns deduped [{id, email}] in deterministic order (sorted by id) so
+// batch slicing is stable across reruns.
+async function fetchAudienceByTagSelection(apiKey, { includeTagIds = [], excludeTagIds = [] } = {}) {
+  if (!includeTagIds.length) {
+    const err = new Error('No include tags selected. Pick at least one tag to include.');
+    err.userFacing = true;
+    throw err;
+  }
+
+  const includedById = new Map();
+  for (const tagId of includeTagIds) {
+    const subs = await fetchSubscribersInTag(apiKey, tagId);
+    for (const s of subs) includedById.set(s.id, s);
+  }
+
+  if (excludeTagIds.length) {
+    const excludedIds = new Set();
+    for (const tagId of excludeTagIds) {
+      const subs = await fetchSubscribersInTag(apiKey, tagId);
+      for (const s of subs) excludedIds.add(s.id);
+    }
+    for (const id of excludedIds) includedById.delete(id);
+  }
+
+  return Array.from(includedById.values()).sort((a, b) => a.id - b.id);
 }
 
 // Bulk-tag up to ~1000 subscribers in one call. Kit v4 accepts an array
@@ -211,7 +229,8 @@ module.exports = {
   listSegments,
   createTag,
   tagSubscriberByEmail,
-  fetchAllSubscribersForAudience,
+  fetchAudienceByTagSelection,
+  fetchSubscribersInTag,
   bulkTagSubscribers,
   bulkUntagSubscribers,
   createAndSendBroadcast,

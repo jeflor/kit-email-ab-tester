@@ -71,12 +71,14 @@ async function performSend(campaignId) {
   const kitKey = getSetting('kit_api_key');
   const lineup = JSON.parse(campaign.subject_lineup || '[]');
 
-  // Pull the audience to size the campaign.
-  const subscribers = await kit.fetchAllSubscribersForAudience(
-    kitKey,
-    campaign.audience_type,
-    campaign.audience_id
-  );
+  // Pull the audience to size the campaign — union of include tags, minus any
+  // subscribers in the exclude tags.
+  const includeTagIds = JSON.parse(campaign.audience_include_tags || '[]');
+  const excludeTagIds = JSON.parse(campaign.audience_exclude_tags || '[]');
+  const subscribers = await kit.fetchAudienceByTagSelection(kitKey, {
+    includeTagIds,
+    excludeTagIds,
+  });
   const audienceRounds = Math.ceil(subscribers.length / campaign.batch_size);
 
   // We only do A/B for as many rounds as we have challengers in the lineup

@@ -76,6 +76,24 @@ app.get('/api/defaults', (_req, res) => {
 
 // ─── API: Kit audience picker ───────────────────────────────────────────────
 
+app.post('/api/audience-preview', async (req, res) => {
+  try {
+    const kitKey = getSetting('kit_api_key');
+    if (!kitKey) return res.status(400).json({ error: 'kit_not_configured' });
+    const includeIds = (Array.isArray(req.body?.include_tag_ids) ? req.body.include_tag_ids : [])
+      .map(x => Number(x)).filter(Number.isFinite);
+    const excludeIds = (Array.isArray(req.body?.exclude_tag_ids) ? req.body.exclude_tag_ids : [])
+      .map(x => Number(x)).filter(Number.isFinite);
+    if (!includeIds.length) return res.status(400).json({ error: 'no_include_tags' });
+    const subs = await kit.fetchAudienceByTagSelection(kitKey, {
+      includeTagIds: includeIds, excludeTagIds: excludeIds,
+    });
+    res.json({ count: subs.length, sample: subs.slice(0, 3).map(s => s.email) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/audiences', async (_req, res) => {
   try {
     const kitKey = getSetting('kit_api_key');
@@ -112,11 +130,11 @@ app.get('/api/campaigns/:id', (req, res) => {
 app.post('/api/campaigns', (req, res) => {
   const {
     name,
-    audience_type,
-    audience_id,
+    audience_include_tags,  // array of tag IDs (>= 1)
+    audience_exclude_tags,  // array of tag IDs (>= 0)
     audience_label,
-    subject_lineup,        // array of subject strings (at least 2)
-    preview_text,          // shared across all variations
+    subject_lineup,         // array of subject strings (at least 2)
+    preview_text,           // shared across all variations
     email_html,
     batch_size,
     wait_minutes,
@@ -126,11 +144,16 @@ app.post('/api/campaigns', (req, res) => {
     ? subject_lineup.map(s => String(s || '').trim()).filter(Boolean)
     : [];
 
-  if (!name || !audience_type || !audience_id || lineup.length < 2 || !email_html) {
-    return res.status(400).json({ error: 'missing_fields', hint: 'Need at least 2 subject lines.' });
-  }
-  if (!['tag', 'segment'].includes(audience_type)) {
-    return res.status(400).json({ error: 'bad_audience_type' });
+  const includeIds = (Array.isArray(audience_include_tags) ? audience_include_tags : [])
+    .map(x => Number(x)).filter(Number.isFinite);
+  const excludeIds = (Array.isArray(audience_exclude_tags) ? audience_exclude_tags : [])
+    .map(x => Number(x)).filter(Number.isFinite);
+
+  if (!name || !includeIds.length || lineup.length < 2 || !email_html) {
+    return res.status(400).json({
+      error: 'missing_fields',
+      hint: 'Need a name, at least one include tag, at least 2 subject lines, and an email body.',
+    });
   }
 
   const adminBatch = parseInt(getSetting('default_batch_size', '1000'), 10);
@@ -142,18 +165,23 @@ app.post('/api/campaigns', (req, res) => {
   const result = db.prepare(`
     INSERT INTO campaigns (
       name, audience_type, audience_id, audience_label,
+      audience_include_tags, audience_exclude_tags,
       starting_subject, current_winner, subject_lineup, preview_text, email_html,
       batch_size, wait_seconds,
       status, created_at, updated_at
     ) VALUES (
-      @name, @audience_type, @audience_id, @audience_label,
+      @name, 'tag', @first_include_id, @audience_label,
+      @audience_include_tags, @audience_exclude_tags,
       @starting_subject, @starting_subject, @subject_lineup, @preview_text, @email_html,
       @batch_size, @wait_seconds,
       'draft', @ts, @ts
     )
   `).run({
-    name, audience_type, audience_id,
+    name,
+    first_include_id: String(includeIds[0]), // legacy column for display compat
     audience_label: audience_label || '',
+    audience_include_tags: JSON.stringify(includeIds),
+    audience_exclude_tags: JSON.stringify(excludeIds),
     starting_subject: lineup[0],
     subject_lineup: JSON.stringify(lineup),
     preview_text: String(preview_text || '').trim(),

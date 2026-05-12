@@ -81,12 +81,32 @@ document.getElementById('toggle_setup').addEventListener('click', (e) => {
 // ─── Campaign form ──────────────────────────────────────────────────────────
 
 function renderAudienceOptions() {
-  const select = document.getElementById('audience_id');
+  const inc = document.getElementById('include_tags');
+  const exc = document.getElementById('exclude_tags');
   if (!audiences.tags.length) {
-    select.innerHTML = '<option value="">(no tags found in your Kit account)</option>';
+    inc.innerHTML = '<option value="">(no tags found in your Kit account)</option>';
+    exc.innerHTML = '';
     return;
   }
-  select.innerHTML = audiences.tags.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('');
+  const opts = audiences.tags
+    .map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`)
+    .join('');
+  inc.innerHTML = opts;
+  exc.innerHTML = opts;
+}
+
+function getSelectedTagIds(selectId) {
+  return Array.from(document.getElementById(selectId).selectedOptions).map(o => Number(o.value));
+}
+
+function getSelectedTagLabels(selectId) {
+  return Array.from(document.getElementById(selectId).selectedOptions).map(o => o.textContent);
+}
+
+function buildAudienceLabel(includeNames, excludeNames) {
+  let label = `Include: ${includeNames.join(', ')}`;
+  if (excludeNames.length) label += ` · Exclude: ${excludeNames.join(', ')}`;
+  return label;
 }
 
 function getLineup() {
@@ -156,6 +176,37 @@ async function loadCampaigns() {
         </tbody>
       </table>`;
 }
+
+document.getElementById('preview_audience_btn').addEventListener('click', async () => {
+  const result = document.getElementById('audience_preview_result');
+  const include = getSelectedTagIds('include_tags');
+  const exclude = getSelectedTagIds('exclude_tags');
+  if (!include.length) {
+    result.style.color = 'var(--warn)';
+    result.textContent = '✗ Pick at least one include tag first.';
+    return;
+  }
+  result.style.color = 'var(--muted)';
+  result.textContent = 'Calling Kit to count subscribers…';
+  try {
+    const r = await fetch('/api/audience-preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ include_tag_ids: include, exclude_tag_ids: exclude }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      result.style.color = 'var(--bad)';
+      result.textContent = `✗ ${data.error || 'Could not preview audience.'}`;
+      return;
+    }
+    result.style.color = data.count ? 'var(--good)' : 'var(--warn)';
+    result.textContent = `${data.count.toLocaleString()} subscriber${data.count === 1 ? '' : 's'} will receive this`;
+  } catch (err) {
+    result.style.color = 'var(--bad)';
+    result.textContent = `✗ ${err.message}`;
+  }
+});
 
 document.getElementById('batch_size').addEventListener('input', refreshRoundSummary);
 document.getElementById('wait_minutes').addEventListener('input', refreshRoundSummary);
@@ -272,22 +323,26 @@ document.getElementById('launch_btn').addEventListener('click', async () => {
     return banner('warn', 'Save your Kit API key in the Setup panel before launching.');
   }
   const lineup = getLineup();
+  const includeIds = getSelectedTagIds('include_tags');
+  const excludeIds = getSelectedTagIds('exclude_tags');
+  const includeNames = getSelectedTagLabels('include_tags');
+  const excludeNames = getSelectedTagLabels('exclude_tags');
   const payload = {
     name: document.getElementById('name').value.trim(),
-    audience_type: document.getElementById('audience_type').value,
-    audience_id: document.getElementById('audience_id').value,
-    audience_label: document.getElementById('audience_id').selectedOptions[0]?.textContent || '',
+    audience_include_tags: includeIds,
+    audience_exclude_tags: excludeIds,
+    audience_label: buildAudienceLabel(includeNames, excludeNames),
     subject_lineup: lineup,
     preview_text: document.getElementById('preview_text').value,
     email_html: quill.root.innerHTML,
     batch_size: document.getElementById('batch_size').value,
     wait_minutes: document.getElementById('wait_minutes').value,
   };
-  if (!payload.name || !payload.audience_id || lineup.length < 2 || !payload.email_html.trim()) {
-    return banner('warn', 'Need a name, an audience, at least 2 subject lines, and an email body.');
+  if (!payload.name || !includeIds.length || lineup.length < 2 || !payload.email_html.trim()) {
+    return banner('warn', 'Need a name, at least one include tag, at least 2 subject lines, and an email body.');
   }
   const summary = lineup.map((s, i) => `${i+1}. ${s}`).join('\n');
-  if (!confirm(`Launch "${payload.name}" to ${payload.audience_label}?\n\nWill test these ${lineup.length} subject lines head-to-head:\n${summary}\n\nThis will send real emails through your Kit account.`)) return;
+  if (!confirm(`Launch "${payload.name}" to:\n${payload.audience_label}\n\nWill test these ${lineup.length} subject lines head-to-head:\n${summary}\n\nThis will send real emails through your Kit account.`)) return;
 
   const r = await fetch('/api/campaigns', {
     method: 'POST',
