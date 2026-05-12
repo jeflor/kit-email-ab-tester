@@ -263,7 +263,7 @@ app.post('/api/preview', (req, res) => {
 app.post('/api/test-send', async (req, res) => {
   try {
     const { subject, email_html, test_email, preview_text } = req.body || {};
-    if (!subject || !email_html || !test_email) {
+    if (!subject || !email_html) {
       return res.status(400).json({ error: 'missing_fields' });
     }
     const kitKey = getSetting('kit_api_key');
@@ -274,8 +274,12 @@ app.post('/api/test-send', async (req, res) => {
       testTagId = await kit.createTag(kitKey, 'kit-ab-test-recipients');
       setSetting('test_tag_id', String(testTagId));
     }
-    // v4: tag the test email (creates the subscriber if not already in Kit)
-    await kit.tagSubscriberByEmail(kitKey, testTagId, test_email);
+    // Optional: if user provided an email, tag them so they're available
+    // to pre-fill in Kit's "Send test" dialog (or via the kit-ab-test-recipients tag).
+    if (test_email) {
+      try { await kit.tagSubscriberByEmail(kitKey, testTagId, test_email); }
+      catch (_e) { /* non-fatal */ }
+    }
     // v4 broadcast send is immediate when send_at is now.
     const broadcastId = await kit.createTestBroadcast(kitKey, {
       subject,
@@ -283,7 +287,7 @@ app.post('/api/test-send', async (req, res) => {
       previewText: preview_text || '',
       testTagId,
     });
-    res.json({ ok: true, broadcast_id: broadcastId, note: 'Test broadcast sent. Check your inbox.' });
+    res.json({ ok: true, broadcast_id: broadcastId, note: 'Draft created in Kit. Open Kit → Broadcasts → Drafts and use Kit\'s native "Send test" button on this draft to send it to yourself.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

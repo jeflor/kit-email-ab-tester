@@ -286,15 +286,15 @@ document.getElementById('test_btn').addEventListener('click', async () => {
   const email_html = quill.root.innerHTML;
   const test_email = document.getElementById('test_email').value.trim();
   const preview_text = document.getElementById('preview_text').value;
-  if (!subject || !email_html.trim() || !test_email) {
+  if (!subject || !email_html.trim()) {
     result.style.color = 'var(--warn)';
-    result.textContent = '✗ Need a subject, body, and email address.';
+    result.textContent = '✗ Need a subject and a body before creating a draft.';
     return;
   }
 
   const originalLabel = btn.textContent;
   btn.disabled = true;
-  btn.textContent = 'Sending…';
+  btn.textContent = 'Creating draft…';
   result.style.color = 'var(--muted)';
   result.textContent = 'Calling Kit API…';
 
@@ -311,7 +311,8 @@ document.getElementById('test_btn').addEventListener('click', async () => {
       banner('error', data.error || 'Test send failed.', 8000);
     } else {
       result.style.color = 'var(--good)';
-      result.textContent = `✓ Sent to ${test_email} (Kit broadcast id ${data.broadcast_id}). Check your inbox in 30–60s.`;
+      const target = test_email ? ` (suggested recipient: ${escapeHtml(test_email)})` : '';
+      result.innerHTML = `✓ Draft #${data.broadcast_id} created. <a href="https://app.kit.com/broadcasts?status=draft" target="_blank" rel="noopener">Open Drafts in Kit</a> → click the [TEST] one → "Send test"${target}.`;
     }
   } catch (err) {
     result.style.color = 'var(--bad)';

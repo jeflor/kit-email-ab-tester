@@ -180,15 +180,24 @@ async function createAndSendBroadcast(apiKey, { subject, contentHtml, previewTex
   return id;
 }
 
-// Test send — uses a "Test Recipient" tag we maintain just for previews.
+// Test send — creates a DRAFT broadcast in Kit (no send_at, no published_at).
+// The draft appears in Kit's Drafts tab where the user can manually trigger
+// the in-Kit "send test to address" flow. Drafts can also be deleted via API
+// (sent broadcasts can't), so the cleanup button actually works for these.
 async function createTestBroadcast(apiKey, { subject, contentHtml, previewText, testTagId, fromEmail }) {
-  return createAndSendBroadcast(apiKey, {
+  const body = {
     subject: `[TEST] ${subject}`,
-    contentHtml,
-    previewText,
-    targetTagId: testTagId,
-    fromEmail,
-  });
+    content: withMaxWidth(contentHtml, 700),
+    description: `[TEST] ${subject}`,
+    public: false,
+    subscriber_filter: [{ all: [{ type: 'tag', ids: [testTagId] }] }],
+  };
+  if (previewText) body.preview_text = previewText;
+  if (fromEmail) body.email_address = fromEmail;
+  const data = await kitFetch('POST', '/broadcasts', apiKey, { body });
+  const id = data.broadcast?.id ?? data.id;
+  if (!id) throw new Error('Kit draft broadcast created but no id returned');
+  return id;
 }
 
 async function listBroadcasts(apiKey, query = {}) {
