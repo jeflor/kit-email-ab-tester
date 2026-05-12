@@ -26,6 +26,15 @@ body {
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
+/* button styled to look like a link — for inline actions inside paragraphs */
+.linkbtn {
+  background: none; border: none; padding: 0; margin: 0;
+  color: var(--accent); cursor: pointer;
+  font: inherit; text-decoration: underline;
+}
+.linkbtn:hover { color: var(--accent-hover); }
+.linkbtn:disabled { opacity: 0.55; cursor: not-allowed; }
+
 .shell { max-width: 1080px; margin: 0 auto; padding: 24px 20px 48px; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
