@@ -81,16 +81,12 @@ document.getElementById('toggle_setup').addEventListener('click', (e) => {
 // ─── Campaign form ──────────────────────────────────────────────────────────
 
 function renderAudienceOptions() {
-  const type = document.getElementById('audience_type').value;
-  const word = type === 'segment' ? 'segment' : 'tag';
-  document.getElementById('audience_label_word').textContent = word;
   const select = document.getElementById('audience_id');
-  const list = type === 'segment' ? audiences.segments : audiences.tags;
-  if (!list.length) {
-    select.innerHTML = `<option value="">(no ${word}s found in your Kit account)</option>`;
+  if (!audiences.tags.length) {
+    select.innerHTML = '<option value="">(no tags found in your Kit account)</option>';
     return;
   }
-  select.innerHTML = list.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('');
+  select.innerHTML = audiences.tags.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('');
 }
 
 function getLineup() {
@@ -161,7 +157,6 @@ async function loadCampaigns() {
       </table>`;
 }
 
-document.getElementById('audience_type').addEventListener('change', renderAudienceOptions);
 document.getElementById('batch_size').addEventListener('input', refreshRoundSummary);
 document.getElementById('wait_minutes').addEventListener('input', refreshRoundSummary);
 document.getElementById('subject_lineup').addEventListener('input', refreshRoundSummary);

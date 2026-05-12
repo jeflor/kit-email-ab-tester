@@ -72,19 +72,12 @@
       </div>
 
       <h3>1. Who should get this email?</h3>
-      <div class="row">
-        <div>
-          <label>Audience type</label>
-          <select id="audience_type">
-            <option value="tag">Tag</option>
-            <option value="segment">Segment</option>
-          </select>
-        </div>
-        <div>
-          <label>Pick the <span id="audience_label_word">tag</span></label>
-          <select id="audience_id"><option>Loading from Kit…</option></select>
-        </div>
-      </div>
+      <label>Pick a tag</label>
+      <select id="audience_id"><option>Loading tags from Kit…</option></select>
+      <input type="hidden" id="audience_type" value="tag">
+      <p class="muted small">
+        Tags only — Kit v4's API doesn't expose segment members, so we can't split a segment into A/B halves. If you usually use a segment, create a tag in Kit and tag the right people, then pick it here.
+      </p>
 
       <h3>2. What does the email say?</h3>
       <label>Campaign name <span class="hint">just for your records</span></label>
