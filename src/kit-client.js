@@ -99,7 +99,8 @@ async function createTag(apiKey, name) {
   const data = await kitFetch('POST', '/tags', apiKey, { body: { name } });
   const tag = data.tag || data;
   if (!tag.id) throw new Error('Kit createTag returned no id');
-  return tag.id;
+  // Force to string for the same reason — TEXT-column safety.
+  return String(tag.id);
 }
 
 // Fetch all subscribers in a single tag. WARNING: Kit v4's
@@ -223,7 +224,9 @@ async function createAndSendBroadcast(apiKey, { subject, contentHtml, previewTex
   const data = await kitFetch('POST', '/broadcasts', apiKey, { body });
   const id = data.broadcast?.id ?? data.id;
   if (!id) throw new Error('Kit broadcast created but no id returned');
-  return id;
+  // Force to string so better-sqlite3 stores it cleanly in TEXT columns.
+  // Otherwise JS Number → SQLite REAL → text "24110400.0" with the float suffix.
+  return String(id);
 }
 
 // Test send — creates a DRAFT broadcast in Kit (no send_at, no published_at).
