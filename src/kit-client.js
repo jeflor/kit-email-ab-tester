@@ -39,7 +39,7 @@ function parseRetryAfter(headerValue) {
   return null;
 }
 
-async function kitFetch(method, path, apiKey, { query, body } = {}) {
+async function kitFetch(method, path, apiKey, { query, body, maxBackoffBudgetMs = 60_000 } = {}) {
   requireKey(apiKey);
   const qs = query ? '?' + new URLSearchParams(query) : '';
   const url = `${KIT_BASE}${path}${qs}`;
@@ -52,17 +52,21 @@ async function kitFetch(method, path, apiKey, { query, body } = {}) {
     },
     body: body ? JSON.stringify(body) : undefined,
   };
+  // We retry on 429 with a backoff that's >= Kit's per-minute window,
+  // but cap the TOTAL accumulated backoff so the request returns inside
+  // Cloudflare's 100s edge timeout for user-facing routes. Background
+  // callers (tag/untag loops) pass a larger budget.
+  let totalBackoff = 0;
   const MAX_ATTEMPTS = 6;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const res = await fetch(url, init);
     if (res.status === 429) {
       const retryAfter = parseRetryAfter(res.headers.get('retry-after'));
-      // Kit's window appears to reset every ~60s. Wait that long minimum so
-      // we don't immediately re-trip on the next attempt.
       const backoff = retryAfter ?? (65_000 + attempt * 5_000 + Math.floor(Math.random() * 1000));
-      if (attempt === MAX_ATTEMPTS) {
-        throw new Error(`Kit ${method} ${path} → 429 after ${MAX_ATTEMPTS} attempts (rate limited)`);
+      if (attempt === MAX_ATTEMPTS || totalBackoff + backoff > maxBackoffBudgetMs) {
+        throw new Error(`Kit ${method} ${path} → 429 (rate limited; gave up after ${(totalBackoff/1000).toFixed(0)}s of backoff)`);
       }
+      totalBackoff += backoff;
       await sleep(backoff);
       continue;
     }
@@ -203,10 +207,17 @@ async function fetchAudienceByTagSelection(apiKey, { includeTagIds = [], exclude
 // all — hence 600ms gap → ~100 req/min, safely under Kit's window.
 const TAG_GAP_MS = 600;
 
+// Background tag/untag uses a larger backoff budget because they're not
+// constrained by Cloudflare's 100s edge timeout (they run server-internal,
+// invoked by the loop runner via setTimeout — no inbound HTTP request).
+const BACKGROUND_BACKOFF_BUDGET_MS = 5 * 60 * 1000;
+
 async function bulkTagSubscribers(apiKey, tagId, subscribers) {
   for (const sub of subscribers) {
     try {
-      await kitFetch('POST', `/tags/${tagId}/subscribers/${sub.id}`, apiKey);
+      await kitFetch('POST', `/tags/${tagId}/subscribers/${sub.id}`, apiKey, {
+        maxBackoffBudgetMs: BACKGROUND_BACKOFF_BUDGET_MS,
+      });
     } catch (e) {
       throw new Error(`Failed to tag subscriber ${sub.id} (${sub.email}): ${e.message}`);
     }
@@ -216,8 +227,11 @@ async function bulkTagSubscribers(apiKey, tagId, subscribers) {
 
 async function bulkUntagSubscribers(apiKey, tagId, subscribers) {
   for (const sub of subscribers) {
-    try { await kitFetch('DELETE', `/tags/${tagId}/subscribers/${sub.id}`, apiKey); }
-    catch (_e) { /* best-effort untag */ }
+    try {
+      await kitFetch('DELETE', `/tags/${tagId}/subscribers/${sub.id}`, apiKey, {
+        maxBackoffBudgetMs: BACKGROUND_BACKOFF_BUDGET_MS,
+      });
+    } catch (_e) { /* best-effort untag */ }
     await sleep(TAG_GAP_MS);
   }
 }
