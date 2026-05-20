@@ -17,6 +17,7 @@
 
 const { db, getSetting } = require('./db');
 const kit = require('./kit-client');
+const tournament = require('./tournament');
 
 const tickTimers = new Map(); // campaignId → setTimeout handle
 
@@ -215,14 +216,35 @@ async function performEvaluate(campaignId) {
   if (!isDone) scheduleTick(campaignId, now());
 }
 
-// ─── Tournament mode (5-subject bracket) ──────────────────────────────────
+// ─── Tournament mode ──────────────────────────────────────────────────────
 //
-// Bracket for 5 subjects [S1..S5]:
-//   Round 1: M1 (S1 vs S2)  and  M2 (S3 vs S4) — sent back-to-back, parallel
-//   Round 2: M1 (W_R1M1 vs W_R1M2) — semifinal
-//   Round 3: M1 (W_R2M1 vs S5)     — final
+// Single-elimination bracket. For N subjects, computes ⌈log2(N)⌉ stages.
+// Pairs subjects two-at-a-time; odd subject byes to the next stage.
+// For 5 subjects: 3 stages, 4 matches total (matches user's intended bracket).
 //
-// Audience usage: 4 batches × batch_size (R1 uses 2 batches, R2 + R3 use 1 each).
+// Stage 1 matches are sent back-to-back so they fire within minutes of each
+// other (eliminates time-of-day skew between them within the round).
+
+// Walk forward through completed stages to determine which subjects enter
+// the given stage. For stage 1, just the initial lineup.
+function computeStageInput(campaignId, stageNumber, initialLineup) {
+  let current = initialLineup.slice();
+  for (let s = 1; s < stageNumber; s++) {
+    const { matches: planned } = tournament.buildStageMatches(current);
+    const dbMatches = getRoundMatches(campaignId, s);
+    if (dbMatches.length < planned.length) {
+      throw new Error(`Stage ${s} has only ${dbMatches.length}/${planned.length} matches evaluated`);
+    }
+    const advancing = [];
+    for (let i = 0; i < planned.length; i++) {
+      advancing.push(getMatchWinnerSubject(dbMatches[i]));
+    }
+    // Anyone past the paired-up portion of current is a bye
+    const byes = current.slice(planned.length * 2);
+    current = [...advancing, ...byes];
+  }
+  return current;
+}
 
 async function performSendTournament(campaignId) {
   const campaign = getCampaign(campaignId);
@@ -230,8 +252,8 @@ async function performSendTournament(campaignId) {
 
   const kitKey = getSetting('kit_api_key');
   const lineup = JSON.parse(campaign.subject_lineup || '[]');
-  if (lineup.length !== 5) {
-    throw new Error(`Tournament mode requires exactly 5 subjects (got ${lineup.length})`);
+  if (lineup.length < 2) {
+    throw new Error(`Tournament needs at least 2 subjects (got ${lineup.length})`);
   }
 
   const includeTagIds = JSON.parse(campaign.audience_include_tags || '[]');
@@ -240,39 +262,34 @@ async function performSendTournament(campaignId) {
     includeTagIds, excludeTagIds,
   });
 
-  const TOTAL_ROUNDS = 3;
-  updateCampaign(campaignId, { total_rounds: TOTAL_ROUNDS });
+  const totalStages = tournament.totalStagesFor(lineup.length);
+  updateCampaign(campaignId, { total_rounds: totalStages });
 
-  const roundNumber = campaign.current_round + 1;
-  if (roundNumber > TOTAL_ROUNDS) {
+  const stageNumber = campaign.current_round + 1;
+  if (stageNumber > totalStages) {
     updateCampaign(campaignId, { status: 'done', next_action: null, next_run_at: null });
     return;
   }
 
-  // Determine matches for this round and which slice of the audience each uses.
-  // sliceIndex maps to which contiguous batch slot in the audience that match
-  // consumes (so total of 4 slots: R1M1=0, R1M2=1, R2M1=2, R3M1=3).
-  const matchPlans = [];
-  if (roundNumber === 1) {
-    matchPlans.push({ matchNumber: 1, sliceIndex: 0, subjectA: lineup[0], subjectB: lineup[1] });
-    matchPlans.push({ matchNumber: 2, sliceIndex: 1, subjectA: lineup[2], subjectB: lineup[3] });
-  } else if (roundNumber === 2) {
-    const r1 = getRoundMatches(campaignId, 1);
-    if (r1.length !== 2) throw new Error('Tournament: round 1 must have 2 matches before round 2');
-    matchPlans.push({
-      matchNumber: 1, sliceIndex: 2,
-      subjectA: getMatchWinnerSubject(r1[0]),
-      subjectB: getMatchWinnerSubject(r1[1]),
-    });
-  } else if (roundNumber === 3) {
-    const r2 = getRoundMatches(campaignId, 2);
-    if (r2.length !== 1) throw new Error('Tournament: round 2 must have 1 match before round 3');
-    matchPlans.push({
-      matchNumber: 1, sliceIndex: 3,
-      subjectA: getMatchWinnerSubject(r2[0]),
-      subjectB: lineup[4],
-    });
+  // Build the matches for this stage from the helper.
+  const stageInput = computeStageInput(campaignId, stageNumber, lineup);
+  const { matches: stageMatches } = tournament.buildStageMatches(stageInput);
+
+  // Compute global slice offset — how many matches have been sent across all
+  // prior stages — so each match gets a unique contiguous batch of subscribers.
+  let priorMatches = 0;
+  for (let s = 1; s < stageNumber; s++) {
+    priorMatches += tournament.buildStageMatches(
+      computeStageInput(campaignId, s, lineup)
+    ).matches.length;
   }
+
+  const matchPlans = stageMatches.map((m, idx) => ({
+    matchNumber: idx + 1,
+    sliceIndex: priorMatches + idx,
+    subjectA: m.a,
+    subjectB: m.b,
+  }));
 
   // Send each planned match: insert round record, tag both halves, create broadcasts.
   // Matches within a round are sent back-to-back (rate limits prevent parallel
@@ -288,15 +305,15 @@ async function performSendTournament(campaignId) {
 
     const roundId = insertRound({
       campaign_id: campaignId,
-      round_number: roundNumber,
+      round_number: stageNumber,
       match_number: plan.matchNumber,
       winner_subject: plan.subjectA,
       challenger_subject: plan.subjectB,
     });
 
     const stamp = Date.now();
-    const tagA = await kit.createTag(kitKey, `abtest-c${campaignId}-r${roundNumber}-m${plan.matchNumber}-A-${stamp}`);
-    const tagB = await kit.createTag(kitKey, `abtest-c${campaignId}-r${roundNumber}-m${plan.matchNumber}-B-${stamp}`);
+    const tagA = await kit.createTag(kitKey, `abtest-c${campaignId}-r${stageNumber}-m${plan.matchNumber}-A-${stamp}`);
+    const tagB = await kit.createTag(kitKey, `abtest-c${campaignId}-r${stageNumber}-m${plan.matchNumber}-B-${stamp}`);
 
     await kit.bulkTagSubscribers(kitKey, tagA, groupA);
     await kit.bulkTagSubscribers(kitKey, tagB, groupB);
@@ -327,7 +344,7 @@ async function performSendTournament(campaignId) {
     });
   }
   updateCampaign(campaignId, {
-    current_round: roundNumber,
+    current_round: stageNumber,
     next_action: 'evaluate',
     next_run_at: evaluateAt,
   });
@@ -356,12 +373,15 @@ async function performEvaluateTournament(campaignId) {
     });
   }
 
-  // current_winner = winner of the last match in this round (for R1, that's M2's winner;
-  // for R2/R3, the only match's winner). For R3 it's the final tournament winner.
+  // current_winner = winner of the last match in this stage. After the final
+  // stage, that's the tournament champion. In the middle stages it's an
+  // informational "leading subject."
   const evaluated = getRoundMatches(campaignId, campaign.current_round);
   const lastWinner = getMatchWinnerSubject(evaluated[evaluated.length - 1]);
 
-  const isDone = campaign.current_round >= 3;
+  const lineup = JSON.parse(campaign.subject_lineup || '[]');
+  const totalStages = tournament.totalStagesFor(lineup.length);
+  const isDone = campaign.current_round >= totalStages;
   updateCampaign(campaignId, {
     current_winner: lastWinner,
     next_action: isDone ? null : 'send',
