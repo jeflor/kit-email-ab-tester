@@ -29,6 +29,32 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 }
 
+// fetch() wrapper that survives empty / non-JSON response bodies. When
+// Cloudflare cuts a connection past its 100s edge timeout, the browser sees
+// an empty body that raw `await r.json()` chokes on with an opaque error.
+// Returns { ok, status, data } where `data.error` is always a useful string
+// when ok is false.
+async function safeFetch(url, options) {
+  let r;
+  try {
+    r = await fetch(url, options);
+  } catch (err) {
+    return { ok: false, status: 0, data: { error: `Network error: ${err.message}` } };
+  }
+  const text = await r.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = {
+      error: text
+        ? `Server returned ${r.status} with non-JSON body: ${text.slice(0, 200)}`
+        : `Empty response (likely a Cloudflare 100s timeout — Kit may still be processing). Try again in 30 seconds.`,
+    };
+  }
+  return { ok: r.ok, status: r.status, data };
+}
+
 function showSetup(show) {
   document.getElementById('setup_card').style.display = show ? '' : 'none';
 }
@@ -215,24 +241,18 @@ document.getElementById('preview_audience_btn').addEventListener('click', async 
   }
   result.style.color = 'var(--muted)';
   result.textContent = 'Calling Kit to count subscribers…';
-  try {
-    const r = await fetch('/api/audience-preview', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ include_tag_ids: include, exclude_tag_ids: exclude }),
-    });
-    const data = await r.json();
-    if (!r.ok) {
-      result.style.color = 'var(--bad)';
-      result.textContent = `✗ ${data.error || 'Could not preview audience.'}`;
-      return;
-    }
-    result.style.color = data.count ? 'var(--good)' : 'var(--warn)';
-    result.textContent = `${data.count.toLocaleString()} subscriber${data.count === 1 ? '' : 's'} will receive this`;
-  } catch (err) {
+  const { ok, data } = await safeFetch('/api/audience-preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ include_tag_ids: include, exclude_tag_ids: exclude }),
+  });
+  if (!ok) {
     result.style.color = 'var(--bad)';
-    result.textContent = `✗ ${err.message}`;
+    result.textContent = `✗ ${data.error || 'Could not preview audience.'}`;
+    return;
   }
+  result.style.color = data.count ? 'var(--good)' : 'var(--warn)';
+  result.textContent = `${data.count.toLocaleString()} subscriber${data.count === 1 ? '' : 's'} will receive this`;
 });
 
 document.getElementById('batch_size').addEventListener('input', refreshRoundSummary);
@@ -244,44 +264,38 @@ document.getElementById('cleanup_tests_btn').addEventListener('click', async (e)
   const result = document.getElementById('cleanup_result');
   result.style.color = 'var(--muted)';
   result.textContent = 'Counting test broadcasts in Kit…';
-  try {
-    const r = await fetch('/api/test-broadcasts');
-    const data = await r.json();
-    if (!r.ok) {
-      result.style.color = 'var(--bad)';
-      result.textContent = `✗ ${data.error || 'Could not list broadcasts.'}`;
-      return;
-    }
-    if (!data.count) {
-      result.style.color = 'var(--muted)';
-      result.textContent = 'No [TEST] broadcasts found.';
-      return;
-    }
-    if (!confirm(`Found ${data.count} broadcast${data.count === 1 ? '' : 's'} with [TEST] in the subject.\n\nWill attempt to delete via Kit API. Note: Kit's API doesn't allow deleting already-sent broadcasts (most test sends fall into that bucket), so a manual cleanup in Kit's UI may still be needed.`)) {
-      result.style.color = 'var(--muted)';
-      result.textContent = 'Cancelled.';
-      return;
-    }
-    result.style.color = 'var(--muted)';
-    result.textContent = `Working through ${data.count}…`;
-    const r2 = await fetch('/api/test-broadcasts', { method: 'DELETE' });
-    const data2 = await r2.json();
-    if (!r2.ok) {
-      result.style.color = 'var(--bad)';
-      result.textContent = `✗ ${data2.error || 'Cleanup failed.'}`;
-      return;
-    }
-    const parts = [];
-    if (data2.deleted) parts.push(`✓ Deleted ${data2.deleted}`);
-    if (data2.already_sent) parts.push(`⚠ ${data2.already_sent} already sent (Kit API won't delete these)`);
-    if (data2.other_failed) parts.push(`✗ ${data2.other_failed} failed`);
-    result.style.color = data2.already_sent && !data2.deleted ? 'var(--warn)' : 'var(--good)';
-    result.innerHTML = parts.join(' · ') +
-      (data2.already_sent ? ` — <a href="https://app.kit.com/broadcasts" target="_blank" rel="noopener">open Kit Broadcasts</a> to delete them manually.` : '');
-  } catch (err) {
+  const first = await safeFetch('/api/test-broadcasts');
+  if (!first.ok) {
     result.style.color = 'var(--bad)';
-    result.textContent = `✗ ${err.message}`;
+    result.textContent = `✗ ${first.data.error || 'Could not list broadcasts.'}`;
+    return;
   }
+  if (!first.data.count) {
+    result.style.color = 'var(--muted)';
+    result.textContent = 'No [TEST] broadcasts found.';
+    return;
+  }
+  if (!confirm(`Found ${first.data.count} broadcast${first.data.count === 1 ? '' : 's'} with [TEST] in the subject.\n\nWill attempt to delete via Kit API. Note: Kit's API doesn't allow deleting already-sent broadcasts (most test sends fall into that bucket), so a manual cleanup in Kit's UI may still be needed.`)) {
+    result.style.color = 'var(--muted)';
+    result.textContent = 'Cancelled.';
+    return;
+  }
+  result.style.color = 'var(--muted)';
+  result.textContent = `Working through ${first.data.count}…`;
+  const second = await safeFetch('/api/test-broadcasts', { method: 'DELETE' });
+  if (!second.ok) {
+    result.style.color = 'var(--bad)';
+    result.textContent = `✗ ${second.data.error || 'Cleanup failed.'}`;
+    return;
+  }
+  const d2 = second.data;
+  const parts = [];
+  if (d2.deleted) parts.push(`✓ Deleted ${d2.deleted}`);
+  if (d2.already_sent) parts.push(`⚠ ${d2.already_sent} already sent (Kit API won't delete these)`);
+  if (d2.other_failed) parts.push(`✗ ${d2.other_failed} failed`);
+  result.style.color = d2.already_sent && !d2.deleted ? 'var(--warn)' : 'var(--good)';
+  result.innerHTML = parts.join(' · ') +
+    (d2.already_sent ? ` — <a href="https://app.kit.com/broadcasts" target="_blank" rel="noopener">open Kit Broadcasts</a> to delete them manually.` : '');
 });
 
 document.getElementById('preview_text').addEventListener('input', () => {
@@ -326,29 +340,22 @@ document.getElementById('test_btn').addEventListener('click', async () => {
   result.style.color = 'var(--muted)';
   result.textContent = 'Calling Kit API…';
 
-  try {
-    const r = await fetch('/api/test-send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ subject, email_html, test_email, preview_text }),
-    });
-    const data = await r.json();
-    if (!r.ok) {
-      result.style.color = 'var(--bad)';
-      result.textContent = `✗ ${data.error || 'Test send failed.'}`;
-      banner('error', data.error || 'Test send failed.', 8000);
-    } else {
-      result.style.color = 'var(--good)';
-      const target = test_email ? ` (suggested recipient: ${escapeHtml(test_email)})` : '';
-      result.innerHTML = `✓ Draft #${data.broadcast_id} created. <a href="https://app.kit.com/broadcasts?status=draft" target="_blank" rel="noopener">Open Drafts in Kit</a> → click the [TEST] one → "Send test"${target}.`;
-    }
-  } catch (err) {
+  const { ok, data } = await safeFetch('/api/test-send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subject, email_html, test_email, preview_text }),
+  });
+  if (!ok) {
     result.style.color = 'var(--bad)';
-    result.textContent = `✗ ${err.message}`;
-  } finally {
-    btn.disabled = false;
-    btn.textContent = originalLabel;
+    result.textContent = `✗ ${data.error || 'Test send failed.'}`;
+    banner('error', data.error || 'Test send failed.', 8000);
+  } else {
+    result.style.color = 'var(--good)';
+    const target = test_email ? ` (suggested recipient: ${escapeHtml(test_email)})` : '';
+    result.innerHTML = `✓ Draft #${data.broadcast_id} created. <a href="https://app.kit.com/broadcasts?status=draft" target="_blank" rel="noopener">Open Drafts in Kit</a> → click the [TEST] one → "Send test"${target}.`;
   }
+  btn.disabled = false;
+  btn.textContent = originalLabel;
 });
 
 document.getElementById('launch_btn').addEventListener('click', async () => {
@@ -389,15 +396,14 @@ document.getElementById('launch_btn').addEventListener('click', async () => {
     : `${lineup.length} subjects head-to-head sequentially`;
   if (!confirm(`Launch "${payload.name}" to:\n${payload.audience_label}\n\n${modeDesc}:\n${summary}\n\nThis will send real emails through your Kit account.`)) return;
 
-  const r = await fetch('/api/campaigns', {
+  const { ok, data } = await safeFetch('/api/campaigns', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  const data = await r.json();
-  if (!r.ok) return banner('error', data.error || 'Could not create campaign.', 6000);
+  if (!ok) return banner('error', data.error || 'Could not create campaign.', 6000);
 
-  await fetch(`/api/campaigns/${data.id}/start`, { method: 'POST' });
+  await safeFetch(`/api/campaigns/${data.id}/start`, { method: 'POST' });
   location.href = `/campaigns/${data.id}`;
 });
 
