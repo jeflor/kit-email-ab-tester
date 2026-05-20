@@ -114,17 +114,43 @@ function getLineup() {
     .split('\n').map(s => s.trim()).filter(Boolean);
 }
 
+function getCampaignType() {
+  const r = document.querySelector('input[name="campaign_type"]:checked');
+  return r ? r.value : 'sequential';
+}
+
 function refreshRoundSummary() {
   const batch = Number(document.getElementById('batch_size').value) || defaults.batch_size;
   const wait = Number(document.getElementById('wait_minutes').value) || defaults.wait_minutes;
   const lineup = getLineup();
-  const abRounds = Math.max(0, lineup.length - 1);
-  const lineupNote = lineup.length
-    ? `${lineup.length} subject${lineup.length === 1 ? '' : 's'} = ${abRounds} A/B round${abRounds === 1 ? '' : 's'}`
-    : 'add subjects above';
+  const type = getCampaignType();
+
+  const hint = document.getElementById('subject_lineup_hint');
+  if (type === 'tournament') {
+    hint.textContent = 'tournament mode · need EXACTLY 5 subjects';
+  } else {
+    hint.textContent = 'one per line · at least 2 · winner moves up each round';
+  }
+
+  let abRounds, wallHours, lineupNote;
+  if (type === 'tournament') {
+    // 3 rounds total: SF (2 matches in parallel), Final, Title — each round = one wait window
+    abRounds = lineup.length === 5 ? 3 : 0;
+    const usedAudience = 4 * batch; // R1 uses 2 batches, R2 + R3 use 1 each
+    wallHours = abRounds * wait / 60;
+    lineupNote = lineup.length === 5
+      ? `${lineup.length} subjects → bracket (SF1: S1 vs S2 ‖ SF2: S3 vs S4 → Final → vs S5) = 3 rounds, uses ~${usedAudience.toLocaleString()} people`
+      : `tournament needs exactly 5 subjects (you have ${lineup.length})`;
+  } else {
+    abRounds = Math.max(0, lineup.length - 1);
+    wallHours = abRounds * wait / 60;
+    lineupNote = lineup.length
+      ? `${lineup.length} subject${lineup.length === 1 ? '' : 's'} = ${abRounds} A/B round${abRounds === 1 ? '' : 's'}`
+      : 'add subjects above';
+  }
   document.getElementById('lineup_summary').textContent = lineupNote;
   document.getElementById('round_summary').textContent =
-    `Each round uses ${batch} people (split ${Math.ceil(batch/2)}/${Math.floor(batch/2)}). With ${abRounds} round${abRounds === 1 ? '' : 's'} × ${wait}min wait = ~${(abRounds * wait / 60).toFixed(1)} hours of wall time. Last batch and any remainder use the running winner.`;
+    `Each round uses ${batch} people (split ${Math.ceil(batch/2)}/${Math.floor(batch/2)}). ${abRounds} round${abRounds === 1 ? '' : 's'} × ${wait}min wait = ~${wallHours.toFixed(1)} hours wall time.`;
 }
 
 async function loadAudiences() {
@@ -162,11 +188,12 @@ async function loadCampaigns() {
   document.getElementById('campaigns_list').innerHTML = !rows.length
     ? '<p class="muted small">No campaigns yet.</p>'
     : `<table>
-        <thead><tr><th>Name</th><th>Status</th><th>Round</th><th>Current winner</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Mode</th><th>Status</th><th>Round</th><th>Current winner</th><th></th></tr></thead>
         <tbody>
           ${rows.map(c => `
             <tr>
               <td>${escapeHtml(c.name)}</td>
+              <td><span class="muted small">${c.campaign_type === 'tournament' ? 'tournament' : 'sequential'}</span></td>
               <td><span class="pill ${c.status}">${c.status}</span></td>
               <td>${c.current_round} / ${c.total_rounds ?? '?'}</td>
               <td>${escapeHtml(c.current_winner || '')}</td>
@@ -211,6 +238,7 @@ document.getElementById('preview_audience_btn').addEventListener('click', async 
 document.getElementById('batch_size').addEventListener('input', refreshRoundSummary);
 document.getElementById('wait_minutes').addEventListener('input', refreshRoundSummary);
 document.getElementById('subject_lineup').addEventListener('input', refreshRoundSummary);
+document.querySelectorAll('input[name="campaign_type"]').forEach(r => r.addEventListener('change', refreshRoundSummary));
 document.getElementById('cleanup_tests_btn').addEventListener('click', async (e) => {
   e.preventDefault();
   const result = document.getElementById('cleanup_result');
@@ -333,8 +361,10 @@ document.getElementById('launch_btn').addEventListener('click', async () => {
   const excludeIds = getSelectedTagIds('exclude_tags');
   const includeNames = getSelectedTagLabels('include_tags');
   const excludeNames = getSelectedTagLabels('exclude_tags');
+  const type = getCampaignType();
   const payload = {
     name: document.getElementById('name').value.trim(),
+    campaign_type: type,
     audience_include_tags: includeIds,
     audience_exclude_tags: excludeIds,
     audience_label: buildAudienceLabel(includeNames, excludeNames),
@@ -344,11 +374,20 @@ document.getElementById('launch_btn').addEventListener('click', async () => {
     batch_size: document.getElementById('batch_size').value,
     wait_minutes: document.getElementById('wait_minutes').value,
   };
-  if (!payload.name || !includeIds.length || lineup.length < 2 || !payload.email_html.trim()) {
-    return banner('warn', 'Need a name, at least one include tag, at least 2 subject lines, and an email body.');
+  if (!payload.name || !includeIds.length || !payload.email_html.trim()) {
+    return banner('warn', 'Need a name, at least one include tag, and an email body.');
+  }
+  if (type === 'tournament' && lineup.length !== 5) {
+    return banner('warn', `Tournament mode requires exactly 5 subject lines (you have ${lineup.length}).`);
+  }
+  if (type === 'sequential' && lineup.length < 2) {
+    return banner('warn', 'Sequential mode needs at least 2 subject lines.');
   }
   const summary = lineup.map((s, i) => `${i+1}. ${s}`).join('\n');
-  if (!confirm(`Launch "${payload.name}" to:\n${payload.audience_label}\n\nWill test these ${lineup.length} subject lines head-to-head:\n${summary}\n\nThis will send real emails through your Kit account.`)) return;
+  const modeDesc = type === 'tournament'
+    ? `Tournament bracket (SF1: S1 vs S2 ‖ SF2: S3 vs S4 → Final → vs S5)`
+    : `${lineup.length} subjects head-to-head sequentially`;
+  if (!confirm(`Launch "${payload.name}" to:\n${payload.audience_label}\n\n${modeDesc}:\n${summary}\n\nThis will send real emails through your Kit account.`)) return;
 
   const r = await fetch('/api/campaigns', {
     method: 'POST',

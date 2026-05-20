@@ -32,6 +32,16 @@ function getActiveRound(campaignId, roundNumber) {
   ).get(campaignId, roundNumber);
 }
 
+function getRoundMatches(campaignId, roundNumber) {
+  return db.prepare(
+    'SELECT * FROM rounds WHERE campaign_id = ? AND round_number = ? ORDER BY match_number ASC'
+  ).all(campaignId, roundNumber);
+}
+
+function getMatchWinnerSubject(m) {
+  return m.outcome === 'challenger_won' ? m.challenger_subject : m.winner_subject;
+}
+
 function updateCampaign(id, patch) {
   const keys = Object.keys(patch);
   if (!keys.length) return;
@@ -43,10 +53,10 @@ function updateCampaign(id, patch) {
 
 function insertRound(row) {
   const stmt = db.prepare(`
-    INSERT INTO rounds (campaign_id, round_number, winner_subject, challenger_subject)
-    VALUES (@campaign_id, @round_number, @winner_subject, @challenger_subject)
+    INSERT INTO rounds (campaign_id, round_number, match_number, winner_subject, challenger_subject)
+    VALUES (@campaign_id, @round_number, @match_number, @winner_subject, @challenger_subject)
   `);
-  return stmt.run(row).lastInsertRowid;
+  return stmt.run({ match_number: 1, ...row }).lastInsertRowid;
 }
 
 function updateRound(id, patch) {
@@ -140,6 +150,7 @@ async function performSend(campaignId) {
     targetTagId: challengerTagId,
   });
 
+  const evaluateAt = now() + campaign.wait_seconds * 1000;
   updateRound(roundId, {
     winner_broadcast_id: winnerBroadcastId,
     challenger_broadcast_id: challengerBroadcastId,
@@ -148,9 +159,10 @@ async function performSend(campaignId) {
     winner_recipients: groupA.length,
     challenger_recipients: groupB.length,
     sent_at: now(),
+    scheduled_evaluate_at: evaluateAt,
+    status: 'waiting',
   });
 
-  const evaluateAt = now() + campaign.wait_seconds * 1000;
   updateCampaign(campaignId, {
     current_round: roundNumber,
     next_action: 'evaluate',
@@ -180,6 +192,7 @@ async function performEvaluate(campaignId) {
     challenger_rate: challengerStats.openRate,
     outcome,
     evaluated_at: now(),
+    status: 'done',
   });
 
   // Clean up temp tags (best-effort).
@@ -202,13 +215,175 @@ async function performEvaluate(campaignId) {
   if (!isDone) scheduleTick(campaignId, now());
 }
 
+// ─── Tournament mode (5-subject bracket) ──────────────────────────────────
+//
+// Bracket for 5 subjects [S1..S5]:
+//   Round 1: M1 (S1 vs S2)  and  M2 (S3 vs S4) — sent back-to-back, parallel
+//   Round 2: M1 (W_R1M1 vs W_R1M2) — semifinal
+//   Round 3: M1 (W_R2M1 vs S5)     — final
+//
+// Audience usage: 4 batches × batch_size (R1 uses 2 batches, R2 + R3 use 1 each).
+
+async function performSendTournament(campaignId) {
+  const campaign = getCampaign(campaignId);
+  if (!campaign || campaign.status !== 'running') return;
+
+  const kitKey = getSetting('kit_api_key');
+  const lineup = JSON.parse(campaign.subject_lineup || '[]');
+  if (lineup.length !== 5) {
+    throw new Error(`Tournament mode requires exactly 5 subjects (got ${lineup.length})`);
+  }
+
+  const includeTagIds = JSON.parse(campaign.audience_include_tags || '[]');
+  const excludeTagIds = JSON.parse(campaign.audience_exclude_tags || '[]');
+  const subscribers = await kit.fetchAudienceByTagSelection(kitKey, {
+    includeTagIds, excludeTagIds,
+  });
+
+  const TOTAL_ROUNDS = 3;
+  updateCampaign(campaignId, { total_rounds: TOTAL_ROUNDS });
+
+  const roundNumber = campaign.current_round + 1;
+  if (roundNumber > TOTAL_ROUNDS) {
+    updateCampaign(campaignId, { status: 'done', next_action: null, next_run_at: null });
+    return;
+  }
+
+  // Determine matches for this round and which slice of the audience each uses.
+  // sliceIndex maps to which contiguous batch slot in the audience that match
+  // consumes (so total of 4 slots: R1M1=0, R1M2=1, R2M1=2, R3M1=3).
+  const matchPlans = [];
+  if (roundNumber === 1) {
+    matchPlans.push({ matchNumber: 1, sliceIndex: 0, subjectA: lineup[0], subjectB: lineup[1] });
+    matchPlans.push({ matchNumber: 2, sliceIndex: 1, subjectA: lineup[2], subjectB: lineup[3] });
+  } else if (roundNumber === 2) {
+    const r1 = getRoundMatches(campaignId, 1);
+    if (r1.length !== 2) throw new Error('Tournament: round 1 must have 2 matches before round 2');
+    matchPlans.push({
+      matchNumber: 1, sliceIndex: 2,
+      subjectA: getMatchWinnerSubject(r1[0]),
+      subjectB: getMatchWinnerSubject(r1[1]),
+    });
+  } else if (roundNumber === 3) {
+    const r2 = getRoundMatches(campaignId, 2);
+    if (r2.length !== 1) throw new Error('Tournament: round 2 must have 1 match before round 3');
+    matchPlans.push({
+      matchNumber: 1, sliceIndex: 3,
+      subjectA: getMatchWinnerSubject(r2[0]),
+      subjectB: lineup[4],
+    });
+  }
+
+  // Send each planned match: insert round record, tag both halves, create broadcasts.
+  // Matches within a round are sent back-to-back (rate limits prevent parallel
+  // tagging anyway), so all matches in this round end up with the same
+  // scheduled_evaluate_at.
+  const evaluateAt = now() + campaign.wait_seconds * 1000;
+  for (const plan of matchPlans) {
+    const sliceStart = plan.sliceIndex * campaign.batch_size;
+    const matchBatch = subscribers.slice(sliceStart, sliceStart + campaign.batch_size);
+    const halfSize = Math.ceil(matchBatch.length / 2);
+    const groupA = matchBatch.slice(0, halfSize);
+    const groupB = matchBatch.slice(halfSize);
+
+    const roundId = insertRound({
+      campaign_id: campaignId,
+      round_number: roundNumber,
+      match_number: plan.matchNumber,
+      winner_subject: plan.subjectA,
+      challenger_subject: plan.subjectB,
+    });
+
+    const stamp = Date.now();
+    const tagA = await kit.createTag(kitKey, `abtest-c${campaignId}-r${roundNumber}-m${plan.matchNumber}-A-${stamp}`);
+    const tagB = await kit.createTag(kitKey, `abtest-c${campaignId}-r${roundNumber}-m${plan.matchNumber}-B-${stamp}`);
+
+    await kit.bulkTagSubscribers(kitKey, tagA, groupA);
+    await kit.bulkTagSubscribers(kitKey, tagB, groupB);
+
+    const bIdA = await kit.createAndSendBroadcast(kitKey, {
+      subject: plan.subjectA,
+      contentHtml: campaign.email_html,
+      previewText: campaign.preview_text || '',
+      targetTagId: tagA,
+    });
+    const bIdB = await kit.createAndSendBroadcast(kitKey, {
+      subject: plan.subjectB,
+      contentHtml: campaign.email_html,
+      previewText: campaign.preview_text || '',
+      targetTagId: tagB,
+    });
+
+    updateRound(roundId, {
+      winner_broadcast_id: bIdA,
+      challenger_broadcast_id: bIdB,
+      winner_tag_id: tagA,
+      challenger_tag_id: tagB,
+      winner_recipients: groupA.length,
+      challenger_recipients: groupB.length,
+      sent_at: now(),
+      scheduled_evaluate_at: evaluateAt,
+      status: 'waiting',
+    });
+  }
+  updateCampaign(campaignId, {
+    current_round: roundNumber,
+    next_action: 'evaluate',
+    next_run_at: evaluateAt,
+  });
+  scheduleTick(campaignId, evaluateAt);
+}
+
+async function performEvaluateTournament(campaignId) {
+  const campaign = getCampaign(campaignId);
+  if (!campaign || campaign.status !== 'running') return;
+
+  const kitKey = getSetting('kit_api_key');
+  const matches = getRoundMatches(campaignId, campaign.current_round);
+  if (!matches.length) return;
+
+  for (const m of matches) {
+    const aStats = await kit.getBroadcastStats(kitKey, m.winner_broadcast_id);
+    const bStats = await kit.getBroadcastStats(kitKey, m.challenger_broadcast_id);
+    const outcome = bStats.openRate > aStats.openRate ? 'challenger_won' : 'winner_kept';
+    updateRound(m.id, {
+      winner_opens: aStats.opens,
+      challenger_opens: bStats.opens,
+      winner_rate: aStats.openRate,
+      challenger_rate: bStats.openRate,
+      outcome,
+      evaluated_at: now(),
+    });
+  }
+
+  // current_winner = winner of the last match in this round (for R1, that's M2's winner;
+  // for R2/R3, the only match's winner). For R3 it's the final tournament winner.
+  const evaluated = getRoundMatches(campaignId, campaign.current_round);
+  const lastWinner = getMatchWinnerSubject(evaluated[evaluated.length - 1]);
+
+  const isDone = campaign.current_round >= 3;
+  updateCampaign(campaignId, {
+    current_winner: lastWinner,
+    next_action: isDone ? null : 'send',
+    next_run_at: isDone ? null : now(),
+    status: isDone ? 'done' : 'running',
+  });
+  if (!isDone) scheduleTick(campaignId, now());
+}
+
+// ─── Tick dispatcher ──────────────────────────────────────────────────────
+
 async function tick(campaignId) {
   tickTimers.delete(campaignId);
   const campaign = getCampaign(campaignId);
   if (!campaign || campaign.status !== 'running' || !campaign.next_action) return;
+  const isTournament = campaign.campaign_type === 'tournament';
   try {
-    if (campaign.next_action === 'send') await performSend(campaignId);
-    else if (campaign.next_action === 'evaluate') await performEvaluate(campaignId);
+    if (campaign.next_action === 'send') {
+      await (isTournament ? performSendTournament(campaignId) : performSend(campaignId));
+    } else if (campaign.next_action === 'evaluate') {
+      await (isTournament ? performEvaluateTournament(campaignId) : performEvaluate(campaignId));
+    }
   } catch (err) {
     logError(campaignId, err);
   }

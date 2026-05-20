@@ -94,7 +94,25 @@
       <label>Campaign name <span class="hint">just for your records</span></label>
       <input type="text" id="name" placeholder="e.g. Spring webinar invite">
 
-      <label>Subject lines to test <span class="hint">one per line · at least 2 · winner moves up each round</span></label>
+      <label>Test structure</label>
+      <div class="row" style="gap:8px;">
+        <label class="ghost" style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; padding:10px 12px; border:1px solid var(--border); border-radius:8px; font-weight:400;">
+          <input type="radio" name="campaign_type" value="sequential" checked style="margin-top:2px;">
+          <div>
+            <div style="font-weight:600;">Sequential head-to-head</div>
+            <div class="muted small">Round 1: S1 vs S2 → winner. Round 2: winner vs S3. Round 3: winner vs S4. Etc. <strong>Any 2+ subjects.</strong> Each round uses a new batch.</div>
+          </div>
+        </label>
+        <label class="ghost" style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; padding:10px 12px; border:1px solid var(--border); border-radius:8px; font-weight:400;">
+          <input type="radio" name="campaign_type" value="tournament" style="margin-top:2px;">
+          <div>
+            <div style="font-weight:600;">Tournament (5 subjects)</div>
+            <div class="muted small">SF1: S1 vs S2 ‖ SF2: S3 vs S4 → Final: W₁ vs W₂ → Title: W vs S5. <strong>Requires exactly 5.</strong> Fewer rounds with the same wait time = faster wall clock.</div>
+          </div>
+        </label>
+      </div>
+
+      <label>Subject lines to test <span class="hint" id="subject_lineup_hint">one per line · at least 2 · winner moves up each round</span></label>
       <textarea id="subject_lineup" rows="6" placeholder="Discover our brand new strategy today!
 The mistake 92% of marketers are still making
 Last chance: doors close Friday

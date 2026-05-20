@@ -74,6 +74,10 @@ ensureColumn('campaigns', 'subject_lineup', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('campaigns', 'preview_text', "TEXT NOT NULL DEFAULT ''");
 ensureColumn('campaigns', 'audience_include_tags', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('campaigns', 'audience_exclude_tags', "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('campaigns', 'campaign_type', "TEXT NOT NULL DEFAULT 'sequential'"); // 'sequential' | 'tournament'
+ensureColumn('rounds', 'match_number', 'INTEGER NOT NULL DEFAULT 1');
+ensureColumn('rounds', 'scheduled_evaluate_at', 'INTEGER'); // per-match evaluate timer
+ensureColumn('rounds', 'status', "TEXT NOT NULL DEFAULT 'pending'"); // pending | ready | waiting | done | error
 
 function getSetting(key, fallback = null) {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);

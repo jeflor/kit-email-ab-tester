@@ -112,7 +112,7 @@ app.get('/api/audiences', async (_req, res) => {
 
 app.get('/api/campaigns', (_req, res) => {
   const rows = db.prepare(
-    'SELECT id, name, status, current_round, total_rounds, current_winner, created_at FROM campaigns ORDER BY id DESC'
+    'SELECT id, name, campaign_type, status, current_round, total_rounds, current_winner, created_at FROM campaigns ORDER BY id DESC'
   ).all();
   res.json(rows);
 });
@@ -130,15 +130,18 @@ app.get('/api/campaigns/:id', (req, res) => {
 app.post('/api/campaigns', (req, res) => {
   const {
     name,
+    campaign_type,          // 'sequential' (default) | 'tournament'
     audience_include_tags,  // array of tag IDs (>= 1)
     audience_exclude_tags,  // array of tag IDs (>= 0)
     audience_label,
-    subject_lineup,         // array of subject strings (at least 2)
+    subject_lineup,         // array of subject strings
     preview_text,           // shared across all variations
     email_html,
     batch_size,
     wait_minutes,
   } = req.body || {};
+
+  const type = campaign_type === 'tournament' ? 'tournament' : 'sequential';
 
   const lineup = Array.isArray(subject_lineup)
     ? subject_lineup.map(s => String(s || '').trim()).filter(Boolean)
@@ -149,10 +152,23 @@ app.post('/api/campaigns', (req, res) => {
   const excludeIds = (Array.isArray(audience_exclude_tags) ? audience_exclude_tags : [])
     .map(x => Number(x)).filter(Number.isFinite);
 
-  if (!name || !includeIds.length || lineup.length < 2 || !email_html) {
+  // Mode-specific subject count validation
+  if (type === 'tournament' && lineup.length !== 5) {
+    return res.status(400).json({
+      error: 'bad_lineup_for_tournament',
+      hint: 'Tournament mode requires exactly 5 subject lines (S1 vs S2 + S3 vs S4 → Final → vs S5).',
+    });
+  }
+  if (type === 'sequential' && lineup.length < 2) {
+    return res.status(400).json({
+      error: 'bad_lineup_for_sequential',
+      hint: 'Sequential mode needs at least 2 subject lines.',
+    });
+  }
+  if (!name || !includeIds.length || !email_html) {
     return res.status(400).json({
       error: 'missing_fields',
-      hint: 'Need a name, at least one include tag, at least 2 subject lines, and an email body.',
+      hint: 'Need a name, at least one include tag, and an email body.',
     });
   }
 
@@ -167,13 +183,13 @@ app.post('/api/campaigns', (req, res) => {
       name, audience_type, audience_id, audience_label,
       audience_include_tags, audience_exclude_tags,
       starting_subject, current_winner, subject_lineup, preview_text, email_html,
-      batch_size, wait_seconds,
+      batch_size, wait_seconds, campaign_type,
       status, created_at, updated_at
     ) VALUES (
       @name, 'tag', @first_include_id, @audience_label,
       @audience_include_tags, @audience_exclude_tags,
       @starting_subject, @starting_subject, @subject_lineup, @preview_text, @email_html,
-      @batch_size, @wait_seconds,
+      @batch_size, @wait_seconds, @campaign_type,
       'draft', @ts, @ts
     )
   `).run({
@@ -188,6 +204,7 @@ app.post('/api/campaigns', (req, res) => {
     email_html,
     batch_size: finalBatch,
     wait_seconds: finalWaitMin * 60,
+    campaign_type: type,
     ts,
   });
   res.json({ id: result.lastInsertRowid });

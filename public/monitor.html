@@ -59,13 +59,23 @@
       if (!r.ok) return;
       const { campaign, rounds } = await r.json();
 
+      const isTournament = campaign.campaign_type === 'tournament';
+      const modeBadge = isTournament ? ' · tournament bracket' : ' · sequential';
+
       document.getElementById('name').textContent = campaign.name;
       document.getElementById('meta').textContent =
-        `${campaign.audience_type}: ${campaign.audience_label || campaign.audience_id} · batch ${campaign.batch_size} · ${Math.round(campaign.wait_seconds/60)}min wait between rounds`;
+        `${campaign.audience_type}: ${campaign.audience_label || campaign.audience_id} · batch ${campaign.batch_size} · ${Math.round(campaign.wait_seconds/60)}min wait between rounds${modeBadge}`;
       document.getElementById('winner').textContent = campaign.current_winner;
       document.getElementById('status_pill').innerHTML = `<span class="pill ${campaign.status}">${campaign.status}</span>`;
+
+      // Friendlier progress label for tournament
+      const stageLabel = (n) => {
+        if (!isTournament) return `Round ${n}`;
+        return n === 1 ? 'Semifinals' : n === 2 ? 'Final' : n === 3 ? 'Title match' : `Round ${n}`;
+      };
+      const total = isTournament ? 3 : (campaign.total_rounds || '?');
       document.getElementById('progress').textContent =
-        `Round ${campaign.current_round} of ${campaign.total_rounds || '?'}` +
+        `${stageLabel(campaign.current_round || 0)} of ${total}` +
         (campaign.next_action ? `   ·   next: ${campaign.next_action}${campaign.next_run_at ? ' at ' + new Date(campaign.next_run_at).toLocaleTimeString() : ''}` : '');
 
       document.getElementById('pause_btn').style.display = campaign.status === 'running' ? '' : 'none';
@@ -80,29 +90,54 @@
         err.style.display = 'none';
       }
 
-      document.getElementById('rounds').innerHTML = rounds.length
-        ? rounds.slice().reverse().map(r => `
+      // Group rounds by round_number so tournament R1 (multiple matches) renders together.
+      const byRound = new Map();
+      for (const m of rounds) {
+        if (!byRound.has(m.round_number)) byRound.set(m.round_number, []);
+        byRound.get(m.round_number).push(m);
+      }
+      const roundNumbers = [...byRound.keys()].sort((a, b) => b - a); // newest first
+
+      function tournamentLabel(m) {
+        const mn = m.match_number || 1;
+        if (m.round_number === 1) return mn === 1 ? 'Semifinal 1 — S1 vs S2' : 'Semifinal 2 — S3 vs S4';
+        if (m.round_number === 2) return 'Final — winners of SF1 vs SF2';
+        if (m.round_number === 3) return 'Title match — vs S5';
+        return `Round ${m.round_number} · Match ${mn}`;
+      }
+
+      function renderMatch(m, matchIdx, totalInRound) {
+        const heading = isTournament
+          ? tournamentLabel(m)
+          : `Round ${m.round_number}${totalInRound > 1 ? ` · Match ${m.match_number || matchIdx + 1}` : ''}`;
+        return `
           <div class="round-card">
             <div class="round-head">
-              <strong>Round ${r.round_number}</strong>
+              <strong>${heading}</strong>
               <span class="small muted">
-                ${r.sent_at ? 'sent ' + new Date(r.sent_at).toLocaleString() : 'preparing…'}
-                ${r.evaluated_at ? '· evaluated ' + new Date(r.evaluated_at).toLocaleTimeString() : ''}
+                ${m.sent_at ? 'sent ' + new Date(m.sent_at).toLocaleString() : 'preparing…'}
+                ${m.evaluated_at ? '· evaluated ' + new Date(m.evaluated_at).toLocaleTimeString() : ''}
               </span>
             </div>
             <div class="subjects">
               <div>
-                <span class="${r.outcome === 'winner_kept' ? 'win' : 'lose'}">A: ${escapeHtml(r.winner_subject)}</span>
-                <span class="small muted">— ${pct(r.winner_rate)} (${r.winner_opens ?? '-'}/${r.winner_recipients ?? '-'})</span>
+                <span class="${m.outcome === 'winner_kept' ? 'win' : 'lose'}">A: ${escapeHtml(m.winner_subject)}</span>
+                <span class="small muted">— ${pct(m.winner_rate)} (${m.winner_opens ?? '-'}/${m.winner_recipients ?? '-'})</span>
               </div>
               <div>
-                <span class="${r.outcome === 'challenger_won' ? 'win' : 'lose'}">B: ${escapeHtml(r.challenger_subject)}</span>
-                <span class="small muted">— ${pct(r.challenger_rate)} (${r.challenger_opens ?? '-'}/${r.challenger_recipients ?? '-'})</span>
+                <span class="${m.outcome === 'challenger_won' ? 'win' : 'lose'}">B: ${escapeHtml(m.challenger_subject)}</span>
+                <span class="small muted">— ${pct(m.challenger_rate)} (${m.challenger_opens ?? '-'}/${m.challenger_recipients ?? '-'})</span>
               </div>
-              ${r.outcome ? `<div class="small">${r.outcome === 'challenger_won' ? '🏆 Challenger took the crown.' : '👑 Defending champion held.'}</div>` : ''}
+              ${m.outcome ? `<div class="small">${m.outcome === 'challenger_won' ? '🏆 Challenger took the crown.' : '👑 Defending champion held.'}</div>` : ''}
             </div>
-          </div>
-        `).join('')
+          </div>`;
+      }
+
+      document.getElementById('rounds').innerHTML = rounds.length
+        ? roundNumbers.map(rn => {
+            const matches = byRound.get(rn);
+            return matches.map((m, i) => renderMatch(m, i, matches.length)).join('');
+          }).join('')
         : '<p class="muted small">No rounds yet — the first send is on its way.</p>';
     }
 
