@@ -123,10 +123,31 @@ async function fetchSubscribersInTag(apiKey, tagId) {
   return out;
 }
 
+// In-memory cache for fetchAllSubscribersWithTags. The full /v4/subscribers
+// paginate can take 13-100+ seconds (Kit's 429 backoffs inject ≥65s pauses
+// mid-fetch), which risks Cloudflare's 100s edge timeout for any caller
+// going through the tunnel. Caching lets the second+ preview return instantly
+// and lets the loop runner skip refetching every round.
+//
+// TTL is short on purpose — long enough to absorb burst preview clicks and a
+// few campaign rounds, short enough that mid-campaign subscriber additions
+// catch up within ~5 minutes.
+const SUBS_CACHE = { key: null, at: 0, subs: null };
+const SUBS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function invalidateSubscriberCache() {
+  SUBS_CACHE.key = null;
+  SUBS_CACHE.at = 0;
+  SUBS_CACHE.subs = null;
+}
+
 // Fetch every active subscriber on the account with their tag memberships
 // included. This is what we use to build an audience because Kit's per-tag
 // endpoint truncates at ~2000 records, but /v4/subscribers paginates fully.
-async function fetchAllSubscribersWithTags(apiKey) {
+async function fetchAllSubscribersWithTags(apiKey, { force = false } = {}) {
+  if (!force && SUBS_CACHE.key === apiKey && SUBS_CACHE.subs && (Date.now() - SUBS_CACHE.at) < SUBS_CACHE_TTL_MS) {
+    return SUBS_CACHE.subs;
+  }
   const out = [];
   let cursor;
   while (true) {
@@ -144,6 +165,9 @@ async function fetchAllSubscribersWithTags(apiKey) {
     if (!cursor) break;
     if (out.length > 500_000) throw new Error('Pagination runaway (>500k subscribers)');
   }
+  SUBS_CACHE.key = apiKey;
+  SUBS_CACHE.at = Date.now();
+  SUBS_CACHE.subs = out;
   return out;
 }
 
@@ -290,6 +314,7 @@ module.exports = {
   fetchAudienceByTagSelection,
   fetchAllSubscribersWithTags,
   fetchSubscribersInTag,
+  invalidateSubscriberCache,
   bulkTagSubscribers,
   bulkUntagSubscribers,
   createAndSendBroadcast,
